@@ -84,6 +84,9 @@ int main(int argc, char** argv) {
     Fl::foreground(171, 178, 191);
 
     TextEditorApp window(1200, 800, "FlitPad");
+
+    window.load_session();
+
     window.show(argc, argv);
 
     bool opened_any = false;
@@ -111,10 +114,6 @@ int main(int argc, char** argv) {
                 }
             }
         }
-    }
-
-    if (!opened_any) {
-        window.load_session();
     }
 
     return Fl::run();
