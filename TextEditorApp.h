@@ -60,7 +60,8 @@ public:
 
     void set_current_dir(const std::string& dir);
     void load_directory(const std::string& dir);
-    void open_file(const std::string& path, bool focus_editor = true);
+    void open_file(const std::string& path);
+    void open_file(const std::string& path, bool focus_editor);
     void new_file();
     void save_current_file();
     bool save_tab(TabData* tab);

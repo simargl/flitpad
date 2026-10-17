@@ -608,18 +608,22 @@ void TextEditorApp::browser_cb(Fl_Widget* w, void* data) {
     if (fl_filename_isdir(target_path.c_str())) {
         self->current_dir_ = target_path;
         self->load_directory(target_path);
+        fb->take_focus();
     } else {
-        bool already_open = false;
+        TabData* target_tab = nullptr;
         for (auto tab : self->open_tabs_) {
             if (tab->filepath == target_path) {
-                already_open = true;
+                target_tab = tab;
                 break;
             }
         }
         
-        self->open_file(target_path, !already_open);
-        if (already_open) {
+        if (target_tab) {
+            self->tabs_->value(target_tab->group);
+            self->update_status_bar();
             fb->take_focus();
+        } else {
+            self->open_file(target_path, true);
         }
     }
 }
@@ -908,6 +912,10 @@ void TextEditorApp::new_file() {
     update_tab_label(tab_data);
     update_status_bar();
     redraw();
+}
+
+void TextEditorApp::open_file(const std::string& path) {
+    open_file(path, true);
 }
 
 void TextEditorApp::open_file(const std::string& path, bool focus_editor) {
