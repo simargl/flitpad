@@ -1,4 +1,5 @@
 #include "TextEditorApp.h"
+#include "FindReplaceDialog.h"
 #include <FL/filename.H>
 #include <FL/fl_ask.H>
 #include <FL/Fl_Menu_Item.H>
@@ -9,6 +10,7 @@
 #include <cstdio>
 #include <cctype>
 #include <algorithm>
+#include <vector>
 
 // 16x16 XPM Icon for Folders (Gold/Yellow)
 static const char* folder_xpm[] = {
@@ -68,6 +70,19 @@ CustomFileBrowser::~CustomFileBrowser() {
 }
 
 int CustomFileBrowser::handle(int event) {
+    if (event == FL_KEYBOARD) {
+        int key = Fl::event_key();
+        if (value() > 0) {
+            if (key == (FL_F + 2)) {
+                app_->rename_selected_file();
+                return 1;
+            }
+            if (key == FL_Delete) {
+                app_->delete_selected_file();
+                return 1;
+            }
+        }
+    }
     return Fl_Browser::handle(event);
 }
 
@@ -334,7 +349,10 @@ void TextEditorApp::buffer_modified_cb(int, int n_inserted, int n_deleted, int, 
     TabData* tab = static_cast<TabData*>(cb_arg);
     if (!tab->is_modified) {
         tab->is_modified = true;
-        update_tab_label(tab);
+        std::string label = tab->filename + " *";
+        tab->group->copy_label(label.c_str());
+        tab->group->redraw();
+        if (tab->tabs) tab->tabs->redraw();
     }
 }
 
@@ -490,8 +508,6 @@ void TextEditorApp::rename_selected_file() {
     if (!text) return;
 
     std::string selected = text;
-    if (selected == "..") return; // Prevent renaming ".."
-
     std::string old_path = current_dir_;
     if (!old_path.empty() && old_path[old_path.length() - 1] != '/' && old_path[old_path.length() - 1] != '\\') {
         old_path += "/";
@@ -539,8 +555,6 @@ void TextEditorApp::delete_selected_file() {
     if (!text) return;
 
     std::string selected = text;
-    if (selected == "..") return; // Prevent deleting ".."
-
     std::string target_path = current_dir_;
     if (!target_path.empty() && target_path[target_path.length() - 1] != '/' && target_path[target_path.length() - 1] != '\\') {
         target_path += "/";
@@ -584,30 +598,29 @@ void TextEditorApp::browser_cb(Fl_Widget* w, void* data) {
     if (!text) return;
 
     std::string selected = text;
-    std::string target_path;
-
-    if (selected == "..") {
-        size_t last_slash = self->current_dir_.find_last_of("/\\");
-        if (last_slash != std::string::npos && last_slash > 0) {
-            target_path = self->current_dir_.substr(0, last_slash);
-        } else {
-            target_path = "/";
-        }
-    } else {
-        target_path = self->current_dir_;
-        if (!target_path.empty() && target_path.back() != '/' && target_path.back() != '\\') {
-            target_path += "/";
-        }
-        target_path += selected;
+    std::string target_path = self->current_dir_;
+    if (!target_path.empty() && target_path.back() != '/' && target_path.back() != '\\') {
+        target_path += "/";
     }
-    
+    target_path += selected;
     target_path = self->get_absolute_path(target_path);
 
     if (fl_filename_isdir(target_path.c_str())) {
         self->current_dir_ = target_path;
         self->load_directory(target_path);
     } else {
-        self->open_file(target_path);
+        bool already_open = false;
+        for (auto tab : self->open_tabs_) {
+            if (tab->filepath == target_path) {
+                already_open = true;
+                break;
+            }
+        }
+        
+        self->open_file(target_path, !already_open);
+        if (already_open) {
+            fb->take_focus();
+        }
     }
 }
 
@@ -634,7 +647,7 @@ TextEditorApp::TextEditorApp(int width, int height, const char* title)
     }
     std::replace(current_dir_.begin(), current_dir_.end(), '\\', '/');
 
-    file_browser_ = new CustomFileBrowser(10, 10, 220, height - 55, this);
+    file_browser_ = new CustomFileBrowser(10, 10, 220, height - 55, this, nullptr);
     file_browser_->color(panel_color);
     file_browser_->textcolor(text_color);
     file_browser_->type(FL_HOLD_BROWSER);
@@ -897,13 +910,15 @@ void TextEditorApp::new_file() {
     redraw();
 }
 
-void TextEditorApp::open_file(const std::string& path) {
+void TextEditorApp::open_file(const std::string& path, bool focus_editor) {
     std::string abs_path = get_absolute_path(path);
 
     for (auto tab : open_tabs_) {
         if (tab->filepath == abs_path) {
             tabs_->value(tab->group);
-            tab->editor->take_focus();
+            if (focus_editor) {
+                tab->editor->take_focus();
+            }
             update_status_bar();
             return;
         }
@@ -966,7 +981,9 @@ void TextEditorApp::open_file(const std::string& path) {
 
     open_tabs_.push_back(tab_data);
     tabs_->value(grp);
-    editor->take_focus();
+    if (focus_editor) {
+        editor->take_focus();
+    }
     update_tab_label(tab_data);
     update_status_bar();
     redraw();
@@ -1151,62 +1168,63 @@ void TextEditorApp::replace_all_text(const std::string& query, const std::string
 }
 
 int TextEditorApp::handle(int event) {
-    if (event == FL_KEYBOARD || event == FL_PUSH || event == FL_DRAG || event == FL_RELEASE) {
+    if (event == FL_KEYBOARD) {
         update_status_bar();
         
-        if (event == FL_KEYBOARD) {
-            int key = Fl::event_key();
-            if (key == FL_F + 2 && Fl::belowmouse() == file_browser_) {
+        int key = Fl::event_key();
+
+        if (file_browser_ && file_browser_->value() > 0) {
+            if (key == (FL_F + 2)) {
                 rename_selected_file();
                 return 1;
             }
-            if (key == FL_Delete && Fl::belowmouse() == file_browser_) {
+            if (key == FL_Delete) {
                 delete_selected_file();
                 return 1;
             }
+        }
 
-            if (Fl::event_state() & FL_CTRL) {
-                if (key == 's' || key == 'S') {
-                    save_current_file();
-                    return 1;
-                } else if (key == 'w' || key == 'W') {
-                    close_current_tab();
-                    return 1;
-                } else if (key == 'q' || key == 'Q') {
-                    try_quit();
-                    return 1;
-                } else if (key == 'n' || key == 'N') {
-                    new_file();
-                    return 1;
-                } else if (key == 'f' || key == 'F') {
-                    show_find_dialog();
-                    return 1;
-                } else if (key == 'h' || key == 'H') {
-                    show_replace_dialog();
-                    return 1;
-                } else if (key == FL_Tab) {
-                    if (!open_tabs_.empty()) {
-                        Fl_Widget* current_tab = tabs_->value();
-                        size_t current_idx = 0;
-                        for (size_t i = 0; i < open_tabs_.size(); ++i) {
-                            if (open_tabs_[i]->group == current_tab) {
-                                current_idx = i;
-                                break;
-                            }
+        if (Fl::event_state() & FL_CTRL) {
+            if (key == 's' || key == 'S') {
+                save_current_file();
+                return 1;
+            } else if (key == 'w' || key == 'W') {
+                close_current_tab();
+                return 1;
+            } else if (key == 'q' || key == 'Q') {
+                try_quit();
+                return 1;
+            } else if (key == 'n' || key == 'N') {
+                new_file();
+                return 1;
+            } else if (key == 'f' || key == 'F') {
+                show_find_dialog();
+                return 1;
+            } else if (key == 'h' || key == 'H') {
+                show_replace_dialog();
+                return 1;
+            } else if (key == FL_Tab) {
+                if (!open_tabs_.empty()) {
+                    Fl_Widget* current_tab = tabs_->value();
+                    size_t current_idx = 0;
+                    for (size_t i = 0; i < open_tabs_.size(); ++i) {
+                        if (open_tabs_[i]->group == current_tab) {
+                            current_idx = i;
+                            break;
                         }
-                        size_t next_idx;
-                        if (Fl::event_state() & FL_SHIFT) {
-                            next_idx = (current_idx == 0) ? open_tabs_.size() - 1 : current_idx - 1;
-                        } else {
-                            next_idx = (current_idx + 1) % open_tabs_.size();
-                        }
-                        tabs_->value(open_tabs_[next_idx]->group);
-                        tabs_->set_changed();
-                        tabs_->do_callback();
-                        update_status_bar();
                     }
-                    return 1;
+                    size_t next_idx;
+                    if (Fl::event_state() & FL_SHIFT) {
+                        next_idx = (current_idx == 0) ? open_tabs_.size() - 1 : current_idx - 1;
+                    } else {
+                        next_idx = (current_idx + 1) % open_tabs_.size();
+                    }
+                    tabs_->value(open_tabs_[next_idx]->group);
+                    tabs_->set_changed();
+                    tabs_->do_callback();
+                    update_status_bar();
                 }
+                return 1;
             }
         }
     }
