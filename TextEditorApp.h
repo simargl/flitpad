@@ -2,9 +2,10 @@
 #define TEXT_EDITOR_APP_H
 
 #include <FL/Fl_Double_Window.H>
-#include <FL/Fl_File_Browser.H>
+#include <FL/Fl_Browser.H>
 #include <FL/Fl_Tabs.H>
 #include <FL/Fl_Box.H>
+#include <FL/Fl_Pixmap.H>
 #include <vector>
 #include <string>
 #include "TabData.h"
@@ -13,11 +14,16 @@
 
 class TextEditorApp;
 
-class CustomFileBrowser : public Fl_File_Browser {
+class CustomFileBrowser : public Fl_Browser {
 private:
     TextEditorApp* app_;
+
 public:
+    Fl_Image* folder_icon_;
+    Fl_Image* file_icon_;
+
     CustomFileBrowser(int x, int y, int w, int h, TextEditorApp* app, const char* l = 0);
+    ~CustomFileBrowser();
     int handle(int event) override;
 };
 
@@ -54,6 +60,7 @@ public:
     ~TextEditorApp();
 
     void set_current_dir(const std::string& dir);
+    void load_directory(const std::string& dir);
     void save_session();
     void load_session();
     TabData* get_current_tab();
@@ -71,7 +78,6 @@ public:
     void replace_text(const std::string& query, const std::string& replacement, bool match_case);
     void replace_all_text(const std::string& query, const std::string& replacement, bool match_case);
 
-    void show_browser_context_menu(int mx, int my);
     void rename_selected_file();
     void delete_selected_file();
     void new_file_in_sidebar();

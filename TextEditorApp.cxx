@@ -10,19 +10,73 @@
 #include <cctype>
 #include <algorithm>
 
+// 16x16 XPM Icon for Folders (Gold/Yellow)
+static const char* folder_xpm[] = {
+  "16 16 2 1",
+  "  c None",
+  "# c #E5C07B",
+  "                ",
+  "  ####          ",
+  " ######         ",
+  " ################",
+  " ################",
+  " ################",
+  " ################",
+  " ################",
+  " ################",
+  " ################",
+  " ################",
+  "                 ",
+  "                 ",
+  "                 ",
+  "                 ",
+  "                 "
+};
+
+// 16x16 XPM Icon for Files (Blue)
+static const char* file_xpm[] = {
+  "16 16 2 1",
+  "  c None",
+  "# c #61AFEF",
+  "                ",
+  "   ##########   ",
+  "   #        #   ",
+  "   #  ##### #   ",
+  "   #      # #   ",
+  "   #  ##### #   ",
+  "   #      # #   ",
+  "   #  ##### #   ",
+  "   #      # #   ",
+  "   #  ##### #   ",
+  "   #      # #   ",
+  "   #        #   ",
+  "   ##########   ",
+  "                ",
+  "                ",
+  "                "
+};
+
 CustomFileBrowser::CustomFileBrowser(int x, int y, int w, int h, TextEditorApp* app, const char* l) 
-    : Fl_File_Browser(x, y, w, h, l), app_(app) {}
+    : Fl_Browser(x, y, w, h, l), app_(app) {
+    folder_icon_ = new Fl_Pixmap(folder_xpm);
+    file_icon_ = new Fl_Pixmap(file_xpm);
+}
+
+CustomFileBrowser::~CustomFileBrowser() {
+    delete folder_icon_;
+    delete file_icon_;
+}
 
 int CustomFileBrowser::handle(int event) {
-    return Fl_File_Browser::handle(event);
+    return Fl_Browser::handle(event);
 }
 
 Fl_Text_Editor::Style_Table_Entry TextEditorApp::style_table_[5] = {
-    { fl_rgb_color(220, 223, 228), FL_COURIER, 17 }, // 'A' = Normal text
-    { fl_rgb_color(198, 120, 221), FL_COURIER, 17 }, // 'B' = Keywords/Tags
-    { fl_rgb_color(92, 99, 112),   FL_COURIER, 17 }, // 'C' = Comments
-    { fl_rgb_color(152, 195, 121), FL_COURIER, 17 }, // 'D' = Strings/Attributes
-    { fl_rgb_color(209, 154, 102), FL_COURIER, 17 }  // 'E' = Numbers
+    { fl_rgb_color(220, 223, 228), FL_COURIER, 17, 0 },
+    { fl_rgb_color(198, 120, 221), FL_COURIER, 17, 0 },
+    { fl_rgb_color(92, 99, 112),   FL_COURIER, 17, 0 },
+    { fl_rgb_color(152, 195, 121), FL_COURIER, 17, 0 },
+    { fl_rgb_color(209, 154, 102), FL_COURIER, 17, 0 }
 };
 
 std::string TextEditorApp::get_absolute_path(const std::string& path) {
@@ -45,27 +99,21 @@ std::string TextEditorApp::get_absolute_path(const std::string& path) {
 std::string TextEditorApp::get_session_file_path() {
     const char* home = getenv("HOME");
     if (!home) home = getenv("USERPROFILE");
-    if (home) {
-        return std::string(home) + "/.flitpad_session";
-    }
+    if (home) return std::string(home) + "/.flitpad_session";
     return ".flitpad_session";
 }
 
 std::string TextEditorApp::get_command_file_path() {
     const char* home = getenv("HOME");
     if (!home) home = getenv("USERPROFILE");
-    if (home) {
-        return std::string(home) + "/.flitpad_commands";
-    }
+    if (home) return std::string(home) + "/.flitpad_commands";
     return ".flitpad_commands";
 }
 
 std::string TextEditorApp::get_lock_file_path() {
     const char* home = getenv("HOME");
     if (!home) home = getenv("USERPROFILE");
-    if (home) {
-        return std::string(home) + "/.flitpad_lock";
-    }
+    if (home) return std::string(home) + "/.flitpad_lock";
     return ".flitpad_lock";
 }
 
@@ -78,9 +126,7 @@ void TextEditorApp::poll_commands_cb(void* data) {
         std::vector<std::string> files_to_open;
         while (std::getline(file, line)) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
-            if (!line.empty()) {
-                files_to_open.push_back(line);
-            }
+            if (!line.empty()) files_to_open.push_back(line);
         }
         file.close();
         std::remove(cmd_path.c_str());
@@ -88,9 +134,7 @@ void TextEditorApp::poll_commands_cb(void* data) {
         for (const auto& f : files_to_open) {
             self->open_file(f);
         }
-        if (!files_to_open.empty()) {
-            self->redraw();
-        }
+        if (!files_to_open.empty()) self->redraw();
     }
     Fl::repeat_timeout(0.5, poll_commands_cb, data);
 }
@@ -180,13 +224,9 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
             }
 
             if (in_tag) {
-                if (std::isspace(static_cast<unsigned char>(c))) {
-                    styles[i] = 'A';
-                } else {
-                    styles[i] = 'B'; 
-                }
+                styles[i] = std::isspace(static_cast<unsigned char>(c)) ? 'A' : 'B';
             } else {
-                styles[i] = 'A'; 
+                styles[i] = 'A';
             }
         }
     } else {
@@ -197,8 +237,7 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
 
         auto is_escaped = [](const std::string& s, size_t idx) {
             if (idx == 0) return false;
-            size_t count = 0;
-            size_t j = idx;
+            size_t count = 0, j = idx;
             while (j > 0 && s[j - 1] == '\\') {
                 count++;
                 j--;
@@ -301,14 +340,10 @@ void TextEditorApp::buffer_modified_cb(int, int n_inserted, int n_deleted, int, 
 
 void TextEditorApp::update_tab_label(TabData* tab) {
     std::string label = tab->filename;
-    if (tab->is_modified) {
-        label += " *";
-    }
+    if (tab->is_modified) label += " *";
     tab->group->copy_label(label.c_str());
     tab->group->redraw();
-    if (tab->tabs) {
-        tab->tabs->redraw();
-    }
+    if (tab->tabs) tab->tabs->redraw();
 }
 
 std::string TextEditorApp::get_language_name(const std::string& path) {
@@ -362,7 +397,7 @@ void TextEditorApp::tabs_cb(Fl_Widget* w, void* data) {
 
     for (auto tab : self->open_tabs_) {
         if (tab->group == current_tab) {
-            tab->editor->take_focus(); // Grab focus on tab switch
+            tab->editor->take_focus();
             size_t last_slash = tab->filepath.find_last_of("/\\");
             if (last_slash != std::string::npos) {
                 std::string dir = tab->filepath.substr(0, last_slash);
@@ -374,6 +409,49 @@ void TextEditorApp::tabs_cb(Fl_Widget* w, void* data) {
         }
     }
     self->update_status_bar();
+}
+
+void TextEditorApp::load_directory(const std::string& dir) {
+    file_browser_->clear();
+
+    // Add exactly one ".." at the top to go up a directory
+    file_browser_->add("..");
+    file_browser_->icon(1, file_browser_->folder_icon_);
+
+    dirent** files = nullptr;
+    int n = fl_filename_list(dir.c_str(), &files, fl_numericsort);
+    if (n > 0) {
+        for (int i = 0; i < n; ++i) {
+            if (!files[i] || !files[i]->d_name) {
+                if (files[i]) std::free(files[i]);
+                continue;
+            }
+            std::string filename = files[i]->d_name;
+            
+            // Strictly omit any entry starting with '.' (this blocks '.', './', '..', and hidden files)
+            if (!filename.empty() && filename[0] == '.') {
+                std::free(files[i]);
+                continue;
+            }
+
+            std::string full_path = dir;
+            if (!full_path.empty() && full_path.back() != '/' && full_path.back() != '\\') {
+                full_path += "/";
+            }
+            full_path += filename;
+
+            file_browser_->add(filename.c_str());
+            int idx = file_browser_->size();
+
+            if (fl_filename_isdir(full_path.c_str())) {
+                file_browser_->icon(idx, file_browser_->folder_icon_);
+            } else {
+                file_browser_->icon(idx, file_browser_->file_icon_);
+            }
+            std::free(files[i]);
+        }
+        std::free(files);
+    }
 }
 
 void TextEditorApp::new_file_in_sidebar() {
@@ -390,7 +468,7 @@ void TextEditorApp::new_file_in_sidebar() {
     std::ofstream outfile(path.c_str());
     outfile.close();
 
-    file_browser_->load(current_dir_.c_str());
+    load_directory(current_dir_);
     open_file(path);
 }
 
@@ -402,7 +480,7 @@ void TextEditorApp::rename_selected_file() {
     if (!text) return;
 
     std::string selected = text;
-    if (selected == "." || selected == "..") return;
+    if (selected == "..") return; // Prevent renaming ".."
 
     std::string old_path = current_dir_;
     if (!old_path.empty() && old_path[old_path.length() - 1] != '/' && old_path[old_path.length() - 1] != '\\') {
@@ -438,7 +516,7 @@ void TextEditorApp::rename_selected_file() {
         }
     }
 
-    file_browser_->load(current_dir_.c_str());
+    load_directory(current_dir_);
     update_status_bar();
     redraw();
 }
@@ -451,7 +529,7 @@ void TextEditorApp::delete_selected_file() {
     if (!text) return;
 
     std::string selected = text;
-    if (selected == "." || selected == "..") return;
+    if (selected == "..") return; // Prevent deleting ".."
 
     std::string target_path = current_dir_;
     if (!target_path.empty() && target_path[target_path.length() - 1] != '/' && target_path[target_path.length() - 1] != '\\') {
@@ -479,7 +557,7 @@ void TextEditorApp::delete_selected_file() {
             }
         }
 
-        file_browser_->load(current_dir_.c_str());
+        load_directory(current_dir_);
         update_status_bar();
         redraw();
     }
@@ -487,7 +565,7 @@ void TextEditorApp::delete_selected_file() {
 
 void TextEditorApp::browser_cb(Fl_Widget* w, void* data) {
     TextEditorApp* self = static_cast<TextEditorApp*>(data);
-    Fl_File_Browser* fb = static_cast<Fl_File_Browser*>(w);
+    CustomFileBrowser* fb = static_cast<CustomFileBrowser*>(w);
     
     int line = fb->value();
     if (line <= 0) return;
@@ -496,17 +574,28 @@ void TextEditorApp::browser_cb(Fl_Widget* w, void* data) {
     if (!text) return;
 
     std::string selected = text;
-    if (selected == "." || selected == "..") return;
+    std::string target_path;
 
-    std::string target_path = self->current_dir_;
-    if (!target_path.empty() && target_path[target_path.length() - 1] != '/' && target_path[target_path.length() - 1] != '\\') {
-        target_path += "/";
+    if (selected == "..") {
+        size_t last_slash = self->current_dir_.find_last_of("/\\");
+        if (last_slash != std::string::npos && last_slash > 0) {
+            target_path = self->current_dir_.substr(0, last_slash);
+        } else {
+            target_path = "/";
+        }
+    } else {
+        target_path = self->current_dir_;
+        if (!target_path.empty() && target_path.back() != '/' && target_path.back() != '\\') {
+            target_path += "/";
+        }
+        target_path += selected;
     }
-    target_path += selected;
+    
+    target_path = self->get_absolute_path(target_path);
 
     if (fl_filename_isdir(target_path.c_str())) {
         self->current_dir_ = target_path;
-        fb->load(target_path.c_str());
+        self->load_directory(target_path);
     } else {
         self->open_file(target_path);
     }
@@ -536,10 +625,10 @@ TextEditorApp::TextEditorApp(int width, int height, const char* title)
     std::replace(current_dir_.begin(), current_dir_.end(), '\\', '/');
 
     file_browser_ = new CustomFileBrowser(10, 10, 220, height - 55, this);
-    file_browser_->type(FL_HOLD_BROWSER);
     file_browser_->color(panel_color);
     file_browser_->textcolor(text_color);
-    file_browser_->load(current_dir_.c_str());
+    file_browser_->type(FL_HOLD_BROWSER);
+    load_directory(current_dir_);
     file_browser_->callback(browser_cb, this);
 
     CustomTabs* ctabs = new CustomTabs(240, 10, width - 250, height - 55);
@@ -608,7 +697,7 @@ TextEditorApp::~TextEditorApp() {
 void TextEditorApp::set_current_dir(const std::string& dir) {
     current_dir_ = dir;
     if (file_browser_) {
-        file_browser_->load(current_dir_.c_str());
+        load_directory(current_dir_);
     }
 }
 
@@ -792,7 +881,7 @@ void TextEditorApp::new_file() {
 
     open_tabs_.push_back(tab_data);
     tabs_->value(grp);
-    editor->take_focus(); // Grab focus immediately
+    editor->take_focus();
     update_tab_label(tab_data);
     update_status_bar();
     redraw();
@@ -804,7 +893,7 @@ void TextEditorApp::open_file(const std::string& path) {
     for (auto tab : open_tabs_) {
         if (tab->filepath == abs_path) {
             tabs_->value(tab->group);
-            tab->editor->take_focus(); // Grab focus if already open
+            tab->editor->take_focus();
             update_status_bar();
             return;
         }
@@ -867,7 +956,7 @@ void TextEditorApp::open_file(const std::string& path) {
 
     open_tabs_.push_back(tab_data);
     tabs_->value(grp);
-    editor->take_focus(); // Grab focus on newly opened file
+    editor->take_focus();
     update_tab_label(tab_data);
     update_status_bar();
     redraw();
@@ -889,7 +978,7 @@ bool TextEditorApp::save_tab(TabData* tab) {
         update_tab_label(tab);
         
         if (file_browser_) {
-            file_browser_->load(current_dir_.c_str());
+            load_directory(current_dir_);
         }
         return true;
     } else {
