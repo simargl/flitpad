@@ -414,13 +414,12 @@ void TextEditorApp::tabs_cb(Fl_Widget* w, void* data) {
 void TextEditorApp::load_directory(const std::string& dir) {
     file_browser_->clear();
 
-    // Add exactly one ".." at the top to go up a directory
-    file_browser_->add("..");
-    file_browser_->icon(1, file_browser_->folder_icon_);
-
     dirent** files = nullptr;
     int n = fl_filename_list(dir.c_str(), &files, fl_numericsort);
     if (n > 0) {
+        std::vector<std::string> folder_list;
+        std::vector<std::string> file_list;
+
         for (int i = 0; i < n; ++i) {
             if (!files[i] || !files[i]->d_name) {
                 if (files[i]) std::free(files[i]);
@@ -428,8 +427,8 @@ void TextEditorApp::load_directory(const std::string& dir) {
             }
             std::string filename = files[i]->d_name;
             
-            // Strictly omit any entry starting with '.' (this blocks '.', './', '..', and hidden files)
-            if (!filename.empty() && filename[0] == '.') {
+            // Exclude ".", "..", and "./" completely from the browser
+            if (filename == "." || filename == ".." || filename == "./") {
                 std::free(files[i]);
                 continue;
             }
@@ -440,17 +439,28 @@ void TextEditorApp::load_directory(const std::string& dir) {
             }
             full_path += filename;
 
-            file_browser_->add(filename.c_str());
-            int idx = file_browser_->size();
-
             if (fl_filename_isdir(full_path.c_str())) {
-                file_browser_->icon(idx, file_browser_->folder_icon_);
+                folder_list.push_back(filename);
             } else {
-                file_browser_->icon(idx, file_browser_->file_icon_);
+                file_list.push_back(filename);
             }
             std::free(files[i]);
         }
         std::free(files);
+
+        // Add folders first
+        for (const auto& folder : folder_list) {
+            file_browser_->add(folder.c_str());
+            int idx = file_browser_->size();
+            file_browser_->icon(idx, file_browser_->folder_icon_);
+        }
+
+        // Then add files
+        for (const auto& file : file_list) {
+            file_browser_->add(file.c_str());
+            int idx = file_browser_->size();
+            file_browser_->icon(idx, file_browser_->file_icon_);
+        }
     }
 }
 
