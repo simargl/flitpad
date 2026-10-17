@@ -362,6 +362,7 @@ void TextEditorApp::tabs_cb(Fl_Widget* w, void* data) {
 
     for (auto tab : self->open_tabs_) {
         if (tab->group == current_tab) {
+            tab->editor->take_focus(); // Grab focus on tab switch
             size_t last_slash = tab->filepath.find_last_of("/\\");
             if (last_slash != std::string::npos) {
                 std::string dir = tab->filepath.substr(0, last_slash);
@@ -697,6 +698,7 @@ void TextEditorApp::load_session() {
         for (auto* tab : open_tabs_) {
             if (tab->filepath == target_path) {
                 tabs_->value(tab->group);
+                tab->editor->take_focus();
                 break;
             }
         }
@@ -790,6 +792,7 @@ void TextEditorApp::new_file() {
 
     open_tabs_.push_back(tab_data);
     tabs_->value(grp);
+    editor->take_focus(); // Grab focus immediately
     update_tab_label(tab_data);
     update_status_bar();
     redraw();
@@ -801,6 +804,7 @@ void TextEditorApp::open_file(const std::string& path) {
     for (auto tab : open_tabs_) {
         if (tab->filepath == abs_path) {
             tabs_->value(tab->group);
+            tab->editor->take_focus(); // Grab focus if already open
             update_status_bar();
             return;
         }
@@ -863,6 +867,8 @@ void TextEditorApp::open_file(const std::string& path) {
 
     open_tabs_.push_back(tab_data);
     tabs_->value(grp);
+    editor->take_focus(); // Grab focus on newly opened file
+    update_tab_label(tab_data);
     update_status_bar();
     redraw();
 }
