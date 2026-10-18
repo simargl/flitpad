@@ -24,6 +24,7 @@ appimage: all
 	echo "[Desktop Entry]" > AppDir/usr/share/applications/flitpad.desktop
 	echo "Name=Flitpad" >> AppDir/usr/share/applications/flitpad.desktop
 	echo "Exec=flitpad" >> AppDir/usr/share/applications/flitpad.desktop
+	echo "Icon=flitpad" >> AppDir/usr/share/applications/flitpad.desktop
 	echo "Type=Application" >> AppDir/usr/share/applications/flitpad.desktop
 	echo "Categories=Utility;TextEditor;" >> AppDir/usr/share/applications/flitpad.desktop
 	ln -sf usr/share/applications/flitpad.desktop AppDir/flitpad.desktop
