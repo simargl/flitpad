@@ -9,6 +9,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    
+    # Add permissions so the GITHUB_TOKEN can manage releases and tags
+    permissions:
+      contents: write
 
     steps:
     - uses: actions/checkout@v5
@@ -27,7 +31,7 @@ jobs:
       run: |
         TAG_NAME="v1.0.${{ github.run_number }}"
         
-        # Delete any existing older releases and their tags to keep only the latest
+        # Clean up older releases and their tags
         echo "Cleaning up older releases..."
         OLD_TAGS=$(gh release list --limit 100 --json tagName --jq '.[].tagName')
         for old_tag in $OLD_TAGS; do
