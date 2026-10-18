@@ -16,13 +16,15 @@ jobs:
     steps:
     - uses: actions/checkout@v5
 
-    - name: Install dependencies
+    - name: Compile & Package AppImage on Ubuntu 16.04
       run: |
-        sudo apt-get update
-        sudo apt-get install -y libfltk1.3-dev libxcursor-dev libxinerama-dev libxft-dev libfuse2 wget
-
-    - name: Compile & Package AppImage
-      run: make appimage
+        docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace ubuntu:16.04 bash -c "
+          sed -i -E 's/(archive|security).ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+          apt-get update
+          apt-get install -y build-essential libfltk1.3-dev libxcursor-dev libxinerama-dev libxft-dev libfuse2 wget curl git
+          make clean
+          make appimage
+        "
 
     - name: Release and Upload AppImage
       env:
@@ -41,5 +43,5 @@ jobs:
         # Create the new release and upload the AppImage
         gh release create "$TAG_NAME" \
           --title "Flitpad $TAG_NAME" \
-          --notes "Automated release build for Flitpad." \
+          --notes "Automated release build for Flitpad (Ubuntu 16.04 compatible)." \
           FLitpad-x86_64.AppImage
