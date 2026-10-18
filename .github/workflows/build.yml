@@ -24,6 +24,7 @@ jobs:
           apt-get update
           apt-get install -y build-essential libfltk1.3-dev libxcursor-dev libxinerama-dev libxft-dev libfuse2 wget curl git file
           make clean
+          sed s'|ldflags|ldstaticflags|'g -i Makefile
           make appimage
         "
 
