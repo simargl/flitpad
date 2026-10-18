@@ -23,6 +23,14 @@ appimage: all
 	cp flitpad AppDir/usr/bin/
 	cp flitpad.png AppDir/usr/share/icons/hicolor/64x64/apps/flitpad.png
 	cp flitpad.png AppDir/flitpad.png
+	
+	# Correctly resolve the AppImage mount directory at runtime
+	echo '#!/bin/sh' > AppDir/AppRun
+	echo 'SELF="$$(readlink -f "$$0")"' >> AppDir/AppRun
+	echo 'HERE="$$(dirname "$$SELF")"' >> AppDir/AppRun
+	echo 'exec "$$HERE/usr/bin/flitpad" "$$@"' >> AppDir/AppRun
+	chmod +x AppDir/AppRun
+
 	echo "[Desktop Entry]" > AppDir/usr/share/applications/flitpad.desktop
 	echo "Name=Flitpad" >> AppDir/usr/share/applications/flitpad.desktop
 	echo "Exec=flitpad" >> AppDir/usr/share/applications/flitpad.desktop
@@ -30,6 +38,7 @@ appimage: all
 	echo "Type=Application" >> AppDir/usr/share/applications/flitpad.desktop
 	echo "Categories=Utility;TextEditor;" >> AppDir/usr/share/applications/flitpad.desktop
 	ln -sf usr/share/applications/flitpad.desktop AppDir/flitpad.desktop
+	
 	wget -nc https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
 	chmod +x appimagetool-x86_64.AppImage
 	ARCH=x86_64 ./appimagetool-x86_64.AppImage AppDir FLitpad-x86_64.AppImage
