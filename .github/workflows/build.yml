@@ -10,17 +10,23 @@ jobs:
   build:
     runs-on: ubuntu-latest
     
-    # Add permissions so the GITHUB_TOKEN can manage releases and tags
+    # Run the entire job inside an Ubuntu Xenial (16.04) container
+    container:
+      image: ubuntu:16.04
+
     permissions:
       contents: write
 
     steps:
     - uses: actions/checkout@v5
 
-    - name: Install dependencies
+    - name: Prepare Environment & Install Dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y libfltk1.3-dev libxcursor-dev libxinerama-dev libxft-dev libfuse2 wget
+        # Fix apt repository mirrors for the end-of-life Xenial release
+        sed -i -E 's/(archive|security).ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+        
+        apt-get update
+        apt-get install -y libfltk1.3-dev libxcursor-dev libxinerama-dev libxft-dev libfuse2 wget git curl
 
     - name: Compile & Package AppImage
       run: make appimage
@@ -31,6 +37,13 @@ jobs:
       run: |
         TAG_NAME="v1.0.${{ github.run_number }}"
         
+        # Install GitHub CLI (gh) since it's not pre-installed in the older container image
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+        chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+        apt-get update
+        apt-get install -y gh
+
         # Clean up older releases and their tags
         echo "Cleaning up older releases..."
         OLD_TAGS=$(gh release list --limit 100 --json tagName --jq '.[].tagName')
@@ -42,5 +55,5 @@ jobs:
         # Create the new release and upload the AppImage
         gh release create "$TAG_NAME" \
           --title "Flitpad $TAG_NAME" \
-          --notes "Automated release build for Flitpad." \
+          --notes "Automated release build for Flitpad on Ubuntu Xenial." \
           FLitpad-x86_64.AppImage
