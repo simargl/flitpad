@@ -24,7 +24,6 @@ appimage: all
 	cp flitpad.png AppDir/usr/share/icons/hicolor/64x64/apps/flitpad.png
 	cp flitpad.png AppDir/flitpad.png
 	
-	# Correctly resolve the AppImage mount directory at runtime
 	echo '#!/bin/sh' > AppDir/AppRun
 	echo 'SELF="$$(readlink -f "$$0")"' >> AppDir/AppRun
 	echo 'HERE="$$(dirname "$$SELF")"' >> AppDir/AppRun
@@ -41,6 +40,11 @@ appimage: all
 	
 	wget -nc https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
 	chmod +x appimagetool-x86_64.AppImage
-	ARCH=x86_64 ./appimagetool-x86_64.AppImage AppDir FLitpad-x86_64.AppImage
+	
+	# Extract appimagetool to bypass FUSE requirements inside Docker
+	./appimagetool-x86_64.AppImage --appimage-extract
+	
+	# Run the extracted tool
+	ARCH=x86_64 ./squashfs-root/AppRun AppDir FLitpad-x86_64.AppImage
 
 .PHONY: all clean appimage
