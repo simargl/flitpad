@@ -1,0 +1,33 @@
+name: Makefile CI
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libfltk1.3-dev libxcursor-dev libxinerama-dev libxft-dev libfuse2 wget
+
+    - name: Compile & Package AppImage
+      run: make appimage
+
+    - name: Release and Upload AppImage
+      if: startsWith(github.ref, 'refs/tags/') # Optional: run only on tags, or remove to run on every push to master
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        TAG_NAME="v1.0.${{ github.run_number }}"
+        gh release create "$TAG_NAME" \
+          --title "Flitpad $TAG_NAME" \
+          --notes "Automated release build for Flitpad." \
+          FLitpad-x86_64.AppImage
