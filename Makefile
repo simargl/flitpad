@@ -19,8 +19,10 @@ clean:
 
 appimage: all
 	rm -rf AppDir
-	mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/32x32/apps
+	mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/64x64/apps
 	cp flitpad AppDir/usr/bin/
+	cp flitpad.png AppDir/usr/share/icons/hicolor/64x64/apps/flitpad.png
+	cp flitpad.png AppDir/flitpad.png
 	echo "[Desktop Entry]" > AppDir/usr/share/applications/flitpad.desktop
 	echo "Name=Flitpad" >> AppDir/usr/share/applications/flitpad.desktop
 	echo "Exec=flitpad" >> AppDir/usr/share/applications/flitpad.desktop
@@ -32,4 +34,4 @@ appimage: all
 	chmod +x appimagetool-x86_64.AppImage
 	ARCH=x86_64 ./appimagetool-x86_64.AppImage AppDir FLitpad-x86_64.AppImage
 
-.PHONY: all clean
+.PHONY: all clean appimage
