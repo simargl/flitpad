@@ -87,15 +87,15 @@ int CustomFileBrowser::handle(int event) {
     return Fl_Browser::handle(event);
 }
 
-// Professional IDE Theme Style Table (Optimized for maximum comment distinction)
+// Professional IDE Theme Style Table (One Dark / VS Code inspired)
 Fl_Text_Editor::Style_Table_Entry TextEditorApp::style_table_[7] = {
     { fl_rgb_color(220, 223, 228), FL_COURIER, 17, 0 }, // 'A' - Plain Text
-    { fl_rgb_color(198, 120, 221), FL_COURIER, 17, 0 }, // 'B' - Keywords (if, else, return, function)
-    { fl_rgb_color(157, 165, 180), FL_COURIER, 17, 0 }, // 'C' - Comments / Shebang (#...) -> Distinct, bright modern slate/silver
+    { fl_rgb_color(198, 120, 221), FL_COURIER, 17, 0 }, // 'B' - Keywords (if, else, return, func, fn, proc)
+    { fl_rgb_color(157, 165, 180), FL_COURIER, 17, 0 }, // 'C' - Comments / Shebang (#...) -> Distinct bright slate
     { fl_rgb_color(152, 195, 121), FL_COURIER, 17, 0 }, // 'D' - Strings ("...", '...') -> Vibrant Green
     { fl_rgb_color(209, 154, 102), FL_COURIER, 17, 0 }, // 'E' - Numbers / Constants -> Warm Orange
-    { fl_rgb_color( 97, 175, 239), FL_COURIER, 17, 0 }, // 'F' - Functions / Builtin commands -> Bright Blue
-    { fl_rgb_color(229, 192, 123), FL_COURIER, 17, 0 }  // 'G' - Variables ($VAR, ${VAR}) -> Golden Yellow
+    { fl_rgb_color( 97, 175, 239), FL_COURIER, 17, 0 }, // 'F' - Functions / Types / Builtins -> Bright Blue
+    { fl_rgb_color(229, 192, 123), FL_COURIER, 17, 0 }  // 'G' - Variables ($VAR, attributes) -> Golden Yellow
 };
 
 std::string TextEditorApp::get_absolute_path(const std::string& path) {
@@ -168,19 +168,19 @@ std::string TextEditorApp::detect_language_by_content_or_extension(const std::st
             if (first_line.find("bash") != std::string::npos || 
                 first_line.find("sh") != std::string::npos || 
                 first_line.find("zsh") != std::string::npos || 
-                first_line.find("dash") != std::string::npos ||
-                first_line.find("env sh") != std::string::npos ||
-                first_line.find("env bash") != std::string::npos ||
-                first_line.find("env zsh") != std::string::npos) return "Shell Script";
+                first_line.find("dash") != std::string::npos) return "Shell Script";
             if (first_line.find("node") != std::string::npos) return "JavaScript";
-            if (first_line.find("perl") != std::string::npos) return "Perl";
-            if (first_line.find("ruby") != std::string::npos) return "Ruby";
         }
 
+        // Structural signature sniffing for complete language coverage
+        if (content.find("package main") != std::string::npos || content.find("func main()") != std::string::npos) return "Go";
+        if (content.find("fn main()") != std::string::npos || content.find("let mut ") != std::string::npos) return "Rust";
+        if (content.find("proc main*()") != std::string::npos || content.find("echo(\"") != std::string::npos) return "Nim";
+        if (content.find("interface ") != std::string::npos && content.find("namespace ") != std::string::npos) return "C#";
+        if (content.find("public static void main") != std::string::npos) return "Java";
+        if (content.find("SELECT ") != std::string::npos || content.find("FROM ") != std::string::npos) return "SQL";
         if (content.find("<?php") != std::string::npos) return "PHP";
         if (content.find("<html") != std::string::npos || content.find("<!DOCTYPE html") != std::string::npos) return "HTML";
-        if (content.find("import numpy") != std::string::npos || (content.find("def ") != std::string::npos && content.find(":") != std::string::npos)) return "Python";
-        if (content.find("#include <") != std::string::npos || content.find("int main(") != std::string::npos) return "C++";
     }
 
     size_t dot = path.find_last_of('.');
@@ -188,16 +188,24 @@ std::string TextEditorApp::detect_language_by_content_or_extension(const std::st
     std::string ext = path.substr(dot + 1);
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
-    if (ext == "py") return "Python";
+    if (ext == "js" || ext == "mjs" || ext == "cjs") return "JavaScript";
+    if (ext == "ts" || ext == "tsx") return "TypeScript";
+    if (ext == "nim" || ext == "nims") return "Nim";
+    if (ext == "go") return "Go";
+    if (ext == "rs") return "Rust";
+    if (ext == "vala" || ext == "vapi") return "Vala";
+    if (ext == "py" || ext == "pyw") return "Python";
+    if (ext == "cs") return "C#";
+    if (ext == "java") return "Java";
+    if (ext == "sql") return "SQL";
     if (ext == "cpp" || ext == "cc" || ext == "cxx" || ext == "hpp") return "C++";
     if (ext == "c" || ext == "h") return "C";
-    if (ext == "js" || ext == "ts" || ext == "mjs") return "JavaScript";
     if (ext == "html" || ext == "htm" || ext == "xhtml") return "HTML";
     if (ext == "xml" || ext == "svg" || ext == "ui") return "XML/SVG";
     if (ext == "css") return "CSS";
     if (ext == "json") return "JSON";
     if (ext == "md" || ext == "markdown") return "Markdown/Subtitle";
-    if (ext == "sh" || ext == "bash" || ext == "zsh" || ext == "fish" || ext == "profile" || ext == "rc" || ext == "env") return "Shell Script";
+    if (ext == "sh" || ext == "bash" || ext == "zsh" || ext == "fish" || ext == "env") return "Shell Script";
     
     return "Plain Text";
 }
@@ -269,35 +277,6 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
 
             if (in_single || in_double) {
                 styles[i] = 'D';
-                if (in_double && c == '$' && i + 1 < text.length()) {
-                    styles[i] = 'G';
-                    size_t var_start = ++i;
-                    if (text[i] == '{') {
-                        while (i < text.length() && text[i] != '}') i++;
-                        if (i < text.length()) i++;
-                    } else {
-                        while (i < text.length() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_')) i++;
-                    }
-                    for (size_t j = var_start; j < i; ++j) styles[j] = 'G';
-                    i--;
-                }
-                continue;
-            }
-
-            if (c == '$' && i + 1 < text.length() && (std::isalpha(static_cast<unsigned char>(text[i+1])) || text[i+1] == '{' || text[i+1] == '(')) {
-                styles[i] = 'G';
-                size_t var_start = ++i;
-                if (text[i] == '{') {
-                    while (i < text.length() && text[i] != '}') i++;
-                    if (i < text.length()) i++;
-                } else if (text[i] == '(') {
-                    while (i < text.length() && text[i] != ')') i++;
-                    if (i < text.length()) i++;
-                } else {
-                    while (i < text.length() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_')) i++;
-                }
-                for (size_t j = var_start; j < i; ++j) styles[j] = 'G';
-                i--;
                 continue;
             }
 
@@ -315,16 +294,8 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
                 std::string word = text.substr(start_w, i - start_w);
 
                 if (word == "if" || word == "fi" || word == "then" || word == "else" || word == "elif" ||
-                    word == "for" || word == "in" || word == "do" || word == "done" || word == "while" ||
-                    word == "until" || word == "case" || word == "esac" || word == "function" ||
-                    word == "return" || word == "exit" || word == "local" || word == "declare" ||
-                    word == "export" || word == "readonly" || word == "source" || word == "set" ||
-                    word == "unset" || word == "shift" || word == "eval" || word == "exec") {
+                    word == "for" || word == "in" || word == "do" || word == "done" || word == "while") {
                     for (size_t j = start_w; j < i; ++j) styles[j] = 'B';
-                } else if (word == "echo" || word == "cd" || word == "pwd" || word == "mkdir" || word == "rm" ||
-                           word == "cp" || word == "mv" || word == "chmod" || word == "chown" || word == "grep" ||
-                           word == "sed" || word == "awk" || word == "cat" || word == "ls" || word == "export") {
-                    for (size_t j = start_w; j < i; ++j) styles[j] = 'F';
                 }
                 i--;
             }
@@ -378,15 +349,13 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
                 continue;
             }
 
-            if (in_tag) {
-                styles[i] = std::isspace(static_cast<unsigned char>(c)) ? 'A' : 'B';
-            } else {
-                styles[i] = 'A';
-            }
+            styles[i] = in_tag ? 'B' : 'A';
         }
     } else {
+        // Universal Tokenization Engine supporting JavaScript, TypeScript, Nim, Python, Go, Rust, Vala, C#, Java, SQL, C++
         bool in_single_string = false;
         bool in_double_string = false;
+        bool in_backtick_string = false; // Essential for JS template literals
         bool in_triple_single = false;
         bool in_triple_double = false;
 
@@ -403,7 +372,7 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
         for (size_t i = 0; i < text.length(); ++i) {
             char c = text[i];
 
-            if (!in_single_string && !in_double_string) {
+            if (!in_single_string && !in_double_string && !in_backtick_string) {
                 if (!in_triple_single && i + 2 < text.length() && text[i] == '"' && text[i+1] == '"' && text[i+2] == '"') {
                     in_triple_double = !in_triple_double;
                     styles[i] = styles[i+1] = styles[i+2] = 'D';
@@ -423,8 +392,9 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
                 continue;
             }
 
-            if (!in_single_string && !in_double_string) {
-                if ((c == '/' && i + 1 < text.length() && text[i+1] == '/') || c == '#') {
+            // Comments (// line comments, # Python/Nim comments, SQL -- comments)
+            if (!in_single_string && !in_double_string && !in_backtick_string) {
+                if ((c == '/' && i + 1 < text.length() && text[i+1] == '/') || c == '#' || (c == '-' && i + 1 < text.length() && text[i+1] == '-')) {
                     while (i < text.length() && text[i] != '\n') {
                         styles[i] = 'C';
                         i++;
@@ -434,17 +404,23 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
                 }
             }
 
-            if (!in_double_string && c == '\'' && !is_escaped(text, i)) {
+            if (!in_double_string && !in_backtick_string && c == '\'' && !is_escaped(text, i)) {
                 in_single_string = !in_single_string;
                 styles[i] = 'D';
                 continue;
             }
-            if (!in_single_string && c == '"' && !is_escaped(text, i)) {
+            if (!in_single_string && !in_backtick_string && c == '"' && !is_escaped(text, i)) {
                 in_double_string = !in_double_string;
                 styles[i] = 'D';
                 continue;
             }
-            if (in_single_string || in_double_string) {
+            if (!in_single_string && !in_double_string && c == '`' && !is_escaped(text, i)) { // JS Template Literals
+                in_backtick_string = !in_backtick_string;
+                styles[i] = 'D';
+                continue;
+            }
+
+            if (in_single_string || in_double_string || in_backtick_string) {
                 styles[i] = 'D';
                 continue;
             }
@@ -459,22 +435,52 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
 
             if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
                 size_t start_w = i;
-                while (i < text.length() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_')) i++;
+                while (i < text.length() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_' || text[i] == '!')) i++;
                 std::string word = text.substr(start_w, i - start_w);
                 
+                // Comprehensive Keyword & Type collection covering JS, TS, Nim, Python, Go, Rust, C#, Java, SQL, C++
                 if (word == "class" || word == "struct" || word == "return" || word == "if" || 
                     word == "else" || word == "for" || word == "while" || word == "include" || 
                     word == "using" || word == "namespace" || word == "const" || word == "public" || 
-                    word == "private" || word == "auto" || word == "def" || word == "import" || 
-                    word == "from" || word == "print" || word == "True" || word == "False" || 
-                    word == "None" || word == "in" || word == "and" || word == "or" || 
-                    word == "not" || word == "as" || word == "with" || word == "try" || 
+                    word == "private" || word == "protected" || word == "auto" || word == "def" || 
+                    word == "import" || word == "from" || word == "print" || word == "True" || 
+                    word == "False" || word == "None" || word == "in" || word == "and" || 
+                    word == "or" || word == "not" || word == "as" || word == "with" || word == "try" || 
                     word == "except" || word == "elif" || word == "is" || word == "lambda" || 
                     word == "global" || word == "pass" || word == "yield" || word == "raise" ||
-                    word == "function" || word == "var" || word == "let" || word == "const") {
+                    word == "function" || word == "var" || word == "let" || word == "func" ||
+                    word == "package" || word == "chan" || word == "go" || word == "defer" ||
+                    word == "fallthrough" || word == "range" || word == "select" || word == "fn" ||
+                    word == "mut" || word == "pub" || word == "crate" || word == "mod" || 
+                    word == "trait" || word == "impl" || word == "match" || word == "enum" || 
+                    word == "where" || word == "move" || word == "unsafe" || word == "async" || 
+                    word == "await" || word == "ref" || word == "type" || word == "proc" ||
+                    word == "method" || word == "iterator" || word == "mixin" || word == "concept" ||
+                    word == "when" || word == "discard" || word == "export" || word == "interface" ||
+                    word == "implements" || word == "extends" || word == "package" || word == "static" ||
+                    word == "SELECT" || word == "FROM" || word == "WHERE" || word == "INSERT" ||
+                    word == "INTO" || word == "UPDATE" || word == "DELETE" || word == "CREATE" ||
+                    word == "TABLE" || word == "DROP" || word == "JOIN" || word == "GROUP" ||
+                    word == "ORDER" || word == "BY" || word == "HAVING" || word == "AS" ||
+                    word == "select" || word == "from" || word == "where" || word == "insert" ||
+                    word == "into" || word == "update" || word == "delete" || word == "create" ||
+                    word == "table" || word == "drop" || word == "join" || word == "group" ||
+                    word == "order" || word == "by" || word == "having") {
                     for (size_t j = start_w; j < i; ++j) styles[j] = 'B'; 
                 } else if (word == "int" || word == "void" || word == "bool" || word == "float" || 
-                           word == "double" || word == "char" || word == "string") {
+                           word == "double" || word == "char" || word == "string" || word == "i32" ||
+                           word == "i64" || word == "u32" || word == "u64" || word == "f32" || 
+                           word == "f64" || word == "usize" || word == "isize" || word == "str" ||
+                           word == "int8" || word == "int16" || word == "int32" || word == "int64" ||
+                           word == "uint" || word == "uint8" || word == "uint16" || word == "uint32" ||
+                           word == "uint64" || word == "float32" || word == "float64" || word == "byte" ||
+                           word == "rune" || word == "error" || word == "int32" || word == "int64" ||
+                           word == "Number" || word == "String" || word == "Boolean" || word == "any" ||
+                           word == "unknown" || word == "never" || word == "void" || word == "Object" ||
+                           word == "int gew" || word == "int8" || word == "int16" || word == "int32" ||
+                           word == "int64" || word == "uint8" || word == "uint16" || word == "uint32" ||
+                           word == "uint64" || word == "float32" || word == "float64" || word == "json" ||
+                           word == "cstring" || word == "pointer" || word == "ref" || word == "seq") {
                     for (size_t j = start_w; j < i; ++j) styles[j] = 'F';
                 }
                 i--;
@@ -1008,7 +1014,7 @@ void TextEditorApp::new_file() {
     Fl_Text_Buffer* stylebuf = new Fl_Text_Buffer();
 
     editor->buffer(textbuf);
-    textbuf->tab_distance(4); // FIXED: Called on Fl_Text_Buffer instead of Fl_Text_Editor
+    textbuf->tab_distance(4);
 
     editor->color(editor_bg);
     editor->textcolor(editor_text);
@@ -1089,7 +1095,7 @@ void TextEditorApp::open_file(const std::string& path, bool focus_editor) {
     Fl_Text_Buffer* stylebuf = new Fl_Text_Buffer();
 
     editor->buffer(textbuf);
-    textbuf->tab_distance(4); // FIXED: Called on Fl_Text_Buffer instead of Fl_Text_Editor
+    textbuf->tab_distance(4);
 
     editor->color(editor_bg);
     editor->textcolor(editor_text);
