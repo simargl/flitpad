@@ -154,7 +154,7 @@ void TextEditorApp::poll_commands_cb(void* data) {
     Fl::repeat_timeout(0.5, poll_commands_cb, data);
 }
 
-void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const char*, void* cb_arg) {
+void TextEditorApp::style_update_cb(int pos, int n_inserted, int n_deleted, int, const char*, void* cb_arg) {
     TabData* tab = static_cast<TabData*>(cb_arg);
     if (!tab || !tab->buffer || !tab->style_buffer) return;
 
@@ -162,32 +162,41 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
     Fl_Text_Buffer* sbuf = tab->style_buffer;
 
     int length = buf->length();
-    if (pos > length) pos = length;
-    
-    int start = buf->line_start(pos);
-    int end = buf->line_end(pos + n_inserted);
-    if (end > length) end = length;
-    if (start > end) start = end;
+    if (length <= 0) {
+        sbuf->text("");
+        return;
+    }
 
-    int text_len = end - start;
-    if (text_len <= 0) return;
+    // Ensure style buffer length matches text buffer length
+    int s_len = sbuf->length();
+    if (s_len < length) {
+        std::string padding(length - s_len, 'A');
+        sbuf->append(padding.c_str());
+    } else if (s_len > length) {
+        sbuf->remove(length, s_len);
+    }
 
-    char* raw_text = buf->text_range(start, end);
+    char* raw_text = buf->text_range(0, length);
     std::string text = raw_text ? raw_text : "";
     std::free(raw_text);
-    std::string styles(text.length(), 'A'); 
+    std::string styles(text.length(), 'A');
 
-    bool is_markup = false;
+    // Determine file type / language
+    std::string ext = "";
     if (!tab->filepath.empty()) {
         size_t dot = tab->filepath.find_last_of('.');
         if (dot != std::string::npos) {
-            std::string ext = tab->filepath.substr(dot + 1);
+            ext = tab->filepath.substr(dot + 1);
             std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (ext == "xml" || ext == "svg" || ext == "html" || ext == "htm" || ext == "xhtml" || ext == "ui") {
-                is_markup = true;
-            }
         }
     }
+
+    bool is_markup = (ext == "xml" || ext == "svg" || ext == "html" || ext == "htm" || ext == "xhtml" || ext == "ui" || ext == "rst");
+    bool is_css = (ext == "css" || ext == "scss" || ext == "less");
+    bool is_json = (ext == "json");
+    bool is_markdown = (ext == "md" || ext == "markdown" || ext == "txt");
+    bool is_python = (ext == "py" || ext == "pyw");
+    bool is_shell = (ext == "sh" || ext == "bash" || ext == "zsh" || ext == "conf" || ext == "ini" || ext == "cfg");
 
     if (is_markup) {
         bool in_tag = false;
@@ -197,6 +206,7 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
         for (size_t i = 0; i < text.length(); ++i) {
             char c = text[i];
 
+            // Comments <!-- ... -->
             if (!in_tag && !in_string && i + 3 < text.length() && text[i] == '<' && text[i+1] == '!' && text[i+2] == '-' && text[i+3] == '-') {
                 while (i < text.length()) {
                     styles[i] = 'C';
@@ -238,17 +248,61 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
                 continue;
             }
 
-            if (in_tag) {
-                styles[i] = std::isspace(static_cast<unsigned char>(c)) ? 'A' : 'B';
-            } else {
-                styles[i] = 'A';
-            }
+            styles[i] = in_tag ? 'B' : 'A';
         }
-    } else {
+    } 
+    else if (is_css) {
+        bool in_comment = false;
+        bool in_string = false;
+        char string_char = '\0';
+
+        for (size_t i = 0; i < text.length(); ++i) {
+            char c = text[i];
+            if (!in_comment && !in_string && i + 1 < text.length() && c == '/' && text[i+1] == '*') {
+                in_comment = true;
+                styles[i] = styles[i+1] = 'C';
+                i++;
+                continue;
+            }
+            if (in_comment) {
+                styles[i] = 'C';
+                if (i + 1 < text.length() && c == '*' && text[i+1] == '/') {
+                    styles[i+1] = 'C';
+                    in_comment = false;
+                    i++;
+                }
+                continue;
+            }
+            if (!in_string && (c == '"' || c == '\'')) {
+                in_string = true;
+                string_char = c;
+                styles[i] = 'D';
+                continue;
+            }
+            if (in_string) {
+                styles[i] = 'D';
+                if (c == string_char) in_string = false;
+                continue;
+            }
+            if (c == '{' || c == '}') {
+                styles[i] = 'B';
+                continue;
+            }
+            if (c == ':') {
+                styles[i] = 'E';
+                continue;
+            }
+            styles[i] = 'A';
+        }
+    }
+    else {
+        // Universal C/C++/Python/JS/Java/Rust/Go/etc Parser
         bool in_single_string = false;
         bool in_double_string = false;
         bool in_triple_single = false;
         bool in_triple_double = false;
+        bool in_block_comment = false;
+        bool in_line_comment = false;
 
         auto is_escaped = [](const std::string& s, size_t idx) {
             if (idx == 0) return false;
@@ -263,14 +317,36 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
         for (size_t i = 0; i < text.length(); ++i) {
             char c = text[i];
 
+            if (c == '\n') {
+                in_line_comment = false;
+                styles[i] = 'A';
+                continue;
+            }
+
+            if (in_line_comment) {
+                styles[i] = 'C';
+                continue;
+            }
+
+            if (in_block_comment) {
+                styles[i] = 'C';
+                if (i + 1 < text.length() && c == '*' && text[i+1] == '/') {
+                    styles[i+1] = 'C';
+                    in_block_comment = false;
+                    i++;
+                }
+                continue;
+            }
+
+            // Triple quotes (Python, etc.)
             if (!in_single_string && !in_double_string) {
-                if (!in_triple_single && i + 2 < text.length() && text[i] == '"' && text[i+1] == '"' && text[i+2] == '"') {
+                if (!in_triple_single && i + 2 < text.length() && c == '"' && text[i+1] == '"' && text[i+2] == '"') {
                     in_triple_double = !in_triple_double;
                     styles[i] = styles[i+1] = styles[i+2] = 'D';
                     i += 2;
                     continue;
                 }
-                if (!in_triple_double && i + 2 < text.length() && text[i] == '\'' && text[i+1] == '\'' && text[i+2] == '\'') {
+                if (!in_triple_double && i + 2 < text.length() && c == '\'' && text[i+1] == '\'' && text[i+2] == '\'') {
                     in_triple_single = !in_triple_single;
                     styles[i] = styles[i+1] = styles[i+2] = 'D';
                     i += 2;
@@ -283,17 +359,38 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
                 continue;
             }
 
+            // Comments
             if (!in_single_string && !in_double_string) {
-                if ((c == '/' && i + 1 < text.length() && text[i+1] == '/') || c == '#') {
-                    while (i < text.length() && text[i] != '\n') {
-                        styles[i] = 'C';
-                        i++;
+                if (i + 1 < text.length() && c == '/' && text[i+1] == '/') {
+                    in_line_comment = true;
+                    styles[i] = styles[i+1] = 'C';
+                    i++;
+                    continue;
+                }
+                if (i + 1 < text.length() && c == '/' && text[i+1] == '*') {
+                    in_block_comment = true;
+                    styles[i] = styles[i+1] = 'C';
+                    i++;
+                    continue;
+                }
+                if (!is_python && !is_shell && c == '#') {
+                    // preprocessor or macro in C/C++
+                    size_t idx = i;
+                    while (idx < text.length() && text[idx] != '\n') {
+                        styles[idx] = 'E';
+                        idx++;
                     }
-                    if (i < text.length()) styles[i] = 'C';
+                    i = idx - 1;
+                    continue;
+                }
+                if ((is_python || is_shell) && c == '#') {
+                    in_line_comment = true;
+                    styles[i] = 'C';
                     continue;
                 }
             }
 
+            // Strings
             if (!in_double_string && c == '\'' && !is_escaped(text, i)) {
                 in_single_string = !in_single_string;
                 styles[i] = 'D';
@@ -309,39 +406,46 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
                 continue;
             }
 
-            if (std::isdigit(static_cast<unsigned char>(c))) {
+            // Numbers
+            if (std::isdigit(static_cast<unsigned char>(c)) && (i == 0 || !std::isalnum(static_cast<unsigned char>(text[i-1])))) {
                 size_t start_n = i;
-                while (i < text.length() && (std::isdigit(static_cast<unsigned char>(text[i])) || text[i] == '.')) i++;
-                for (size_t j = start_n; j < i; ++j) styles[j] = 'E'; 
+                while (i < text.length() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '.')) i++;
+                for (size_t j = start_n; j < i; ++j) styles[j] = 'E';
                 i--;
                 continue;
             }
 
+            // Keywords & Identifiers
             if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
                 size_t start_w = i;
                 while (i < text.length() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_')) i++;
                 std::string word = text.substr(start_w, i - start_w);
-                
+
+                // Comprehensive keyword set covering C, C++, Python, JS, Java, C#, Go, Rust, PHP, Ruby, etc.
                 if (word == "class" || word == "struct" || word == "int" || word == "void" || 
                     word == "return" || word == "if" || word == "else" || word == "for" || 
                     word == "while" || word == "include" || word == "using" || word == "namespace" ||
                     word == "bool" || word == "true" || word == "false" || word == "const" || 
-                    word == "public" || word == "private" || word == "auto" || word == "float" || 
-                    word == "double" || word == "char" || word == "string" ||
+                    word == "public" || word == "private" || word == "protected" || word == "auto" || 
+                    word == "float" || word == "double" || word == "char" || word == "string" ||
                     word == "def" || word == "import" || word == "from" || word == "print" ||
                     word == "True" || word == "False" || word == "None" || word == "in" || 
                     word == "and" || word == "or" || word == "not" || word == "as" || 
                     word == "with" || word == "try" || word == "except" || word == "elif" ||
                     word == "is" || word == "lambda" || word == "global" || word == "pass" ||
-                    word == "yield" || word == "raise" || word == "finally" || word == "assert") {
-                    for (size_t j = start_w; j < i; ++j) styles[j] = 'B'; 
+                    word == "yield" || word == "raise" || word == "finally" || word == "assert" ||
+                    word == "function" || word == "var" || word == "let" || word == "const" ||
+                    word == "new" || word == "typeof" || word == "instanceof" || word == "package" ||
+                    word == "interface" || word == "implements" || word == "extends" || word == "fn" ||
+                    word == "pub" || word == "mod" || word == "use" || word == "crate" || word == "mut") {
+                    for (size_t j = start_w; j < i; ++j) styles[j] = 'B';
                 }
                 i--;
             }
         }
     }
 
-    sbuf->replace(start, end, styles.c_str());
+    sbuf->replace(0, sbuf->length(), styles.c_str());
 }
 
 void TextEditorApp::buffer_modified_cb(int, int n_inserted, int n_deleted, int, const char*, void* cb_arg) {
