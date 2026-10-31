@@ -1,5 +1,6 @@
 #include "TextEditorApp.h"
 #include "FindReplaceDialog.h"
+#include "TabData.h"
 #include <FL/filename.H>
 #include <FL/fl_ask.H>
 #include <FL/Fl_Menu_Item.H>
@@ -86,12 +87,15 @@ int CustomFileBrowser::handle(int event) {
     return Fl_Browser::handle(event);
 }
 
-Fl_Text_Editor::Style_Table_Entry TextEditorApp::style_table_[5] = {
-    { fl_rgb_color(220, 223, 228), FL_COURIER, 17, 0 },
-    { fl_rgb_color(198, 120, 221), FL_COURIER, 17, 0 },
-    { fl_rgb_color(92, 99, 112),   FL_COURIER, 17, 0 },
-    { fl_rgb_color(152, 195, 121), FL_COURIER, 17, 0 },
-    { fl_rgb_color(209, 154, 102), FL_COURIER, 17, 0 }
+// Professional IDE Theme Style Table (Optimized for maximum comment distinction)
+Fl_Text_Editor::Style_Table_Entry TextEditorApp::style_table_[7] = {
+    { fl_rgb_color(220, 223, 228), FL_COURIER, 17, 0 }, // 'A' - Plain Text
+    { fl_rgb_color(198, 120, 221), FL_COURIER, 17, 0 }, // 'B' - Keywords (if, else, return, function)
+    { fl_rgb_color(157, 165, 180), FL_COURIER, 17, 0 }, // 'C' - Comments / Shebang (#...) -> Distinct, bright modern slate/silver
+    { fl_rgb_color(152, 195, 121), FL_COURIER, 17, 0 }, // 'D' - Strings ("...", '...') -> Vibrant Green
+    { fl_rgb_color(209, 154, 102), FL_COURIER, 17, 0 }, // 'E' - Numbers / Constants -> Warm Orange
+    { fl_rgb_color( 97, 175, 239), FL_COURIER, 17, 0 }, // 'F' - Functions / Builtin commands -> Bright Blue
+    { fl_rgb_color(229, 192, 123), FL_COURIER, 17, 0 }  // 'G' - Variables ($VAR, ${VAR}) -> Golden Yellow
 };
 
 std::string TextEditorApp::get_absolute_path(const std::string& path) {
@@ -154,7 +158,55 @@ void TextEditorApp::poll_commands_cb(void* data) {
     Fl::repeat_timeout(0.5, poll_commands_cb, data);
 }
 
-void TextEditorApp::style_update_cb(int pos, int n_inserted, int n_deleted, int, const char*, void* cb_arg) {
+std::string TextEditorApp::detect_language_by_content_or_extension(const std::string& path, const std::string& content) {
+    if (!content.empty()) {
+        size_t newline_idx = content.find('\n');
+        std::string first_line = (newline_idx == std::string::npos) ? content : content.substr(0, newline_idx);
+        
+        if (first_line.rfind("#!", 0) == 0) {
+            if (first_line.find("python") != std::string::npos) return "Python";
+            if (first_line.find("bash") != std::string::npos || 
+                first_line.find("sh") != std::string::npos || 
+                first_line.find("zsh") != std::string::npos || 
+                first_line.find("dash") != std::string::npos ||
+                first_line.find("env sh") != std::string::npos ||
+                first_line.find("env bash") != std::string::npos ||
+                first_line.find("env zsh") != std::string::npos) return "Shell Script";
+            if (first_line.find("node") != std::string::npos) return "JavaScript";
+            if (first_line.find("perl") != std::string::npos) return "Perl";
+            if (first_line.find("ruby") != std::string::npos) return "Ruby";
+        }
+
+        if (content.find("<?php") != std::string::npos) return "PHP";
+        if (content.find("<html") != std::string::npos || content.find("<!DOCTYPE html") != std::string::npos) return "HTML";
+        if (content.find("import numpy") != std::string::npos || (content.find("def ") != std::string::npos && content.find(":") != std::string::npos)) return "Python";
+        if (content.find("#include <") != std::string::npos || content.find("int main(") != std::string::npos) return "C++";
+    }
+
+    size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos) return "Plain Text";
+    std::string ext = path.substr(dot + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    if (ext == "py") return "Python";
+    if (ext == "cpp" || ext == "cc" || ext == "cxx" || ext == "hpp") return "C++";
+    if (ext == "c" || ext == "h") return "C";
+    if (ext == "js" || ext == "ts" || ext == "mjs") return "JavaScript";
+    if (ext == "html" || ext == "htm" || ext == "xhtml") return "HTML";
+    if (ext == "xml" || ext == "svg" || ext == "ui") return "XML/SVG";
+    if (ext == "css") return "CSS";
+    if (ext == "json") return "JSON";
+    if (ext == "md" || ext == "markdown") return "Markdown/Subtitle";
+    if (ext == "sh" || ext == "bash" || ext == "zsh" || ext == "fish" || ext == "profile" || ext == "rc" || ext == "env") return "Shell Script";
+    
+    return "Plain Text";
+}
+
+std::string TextEditorApp::get_language_name(const std::string& path, const std::string& content) {
+    return detect_language_by_content_or_extension(path, content);
+}
+
+void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const char*, void* cb_arg) {
     TabData* tab = static_cast<TabData*>(cb_arg);
     if (!tab || !tab->buffer || !tab->style_buffer) return;
 
@@ -162,43 +214,122 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int n_deleted, int,
     Fl_Text_Buffer* sbuf = tab->style_buffer;
 
     int length = buf->length();
-    if (length <= 0) {
-        sbuf->text("");
-        return;
-    }
+    if (pos > length) pos = length;
+    
+    int start = buf->line_start(pos);
+    int end = buf->line_end(pos + n_inserted);
+    if (end > length) end = length;
+    if (start > end) start = end;
 
-    // Ensure style buffer length matches text buffer length
-    int s_len = sbuf->length();
-    if (s_len < length) {
-        std::string padding(length - s_len, 'A');
-        sbuf->append(padding.c_str());
-    } else if (s_len > length) {
-        sbuf->remove(length, s_len);
-    }
+    int text_len = end - start;
+    if (text_len <= 0) return;
 
-    char* raw_text = buf->text_range(0, length);
+    char* raw_text = buf->text_range(start, end);
     std::string text = raw_text ? raw_text : "";
     std::free(raw_text);
     std::string styles(text.length(), 'A');
 
-    // Determine file type / language
-    std::string ext = "";
-    if (!tab->filepath.empty()) {
-        size_t dot = tab->filepath.find_last_of('.');
-        if (dot != std::string::npos) {
-            ext = tab->filepath.substr(dot + 1);
-            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        }
+    char* full_doc_raw = buf->text_range(0, std::min(length, 512));
+    std::string full_doc = full_doc_raw ? full_doc_raw : "";
+    std::free(full_doc_raw);
+
+    std::string lang = detect_language_by_content_or_extension(tab->filepath, full_doc);
+
+    if (lang == "Plain Text") {
+        sbuf->replace(start, end, styles.c_str());
+        return;
     }
 
-    bool is_markup = (ext == "xml" || ext == "svg" || ext == "html" || ext == "htm" || ext == "xhtml" || ext == "ui" || ext == "rst");
-    bool is_css = (ext == "css" || ext == "scss" || ext == "less");
-    bool is_json = (ext == "json");
-    bool is_markdown = (ext == "md" || ext == "markdown" || ext == "txt");
-    bool is_python = (ext == "py" || ext == "pyw");
-    bool is_shell = (ext == "sh" || ext == "bash" || ext == "zsh" || ext == "conf" || ext == "ini" || ext == "cfg");
+    if (lang == "Shell Script") {
+        bool in_single = false;
+        bool in_double = false;
 
-    if (is_markup) {
+        for (size_t i = 0; i < text.length(); ++i) {
+            char c = text[i];
+
+            if (!in_single && !in_double && c == '#') {
+                while (i < text.length() && text[i] != '\n') {
+                    styles[i] = 'C';
+                    i++;
+                }
+                if (i < text.length()) styles[i] = 'C';
+                continue;
+            }
+
+            if (!in_double && c == '\'') {
+                in_single = !in_single;
+                styles[i] = 'D';
+                continue;
+            }
+            if (!in_single && c == '"') {
+                in_double = !in_double;
+                styles[i] = 'D';
+                continue;
+            }
+
+            if (in_single || in_double) {
+                styles[i] = 'D';
+                if (in_double && c == '$' && i + 1 < text.length()) {
+                    styles[i] = 'G';
+                    size_t var_start = ++i;
+                    if (text[i] == '{') {
+                        while (i < text.length() && text[i] != '}') i++;
+                        if (i < text.length()) i++;
+                    } else {
+                        while (i < text.length() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_')) i++;
+                    }
+                    for (size_t j = var_start; j < i; ++j) styles[j] = 'G';
+                    i--;
+                }
+                continue;
+            }
+
+            if (c == '$' && i + 1 < text.length() && (std::isalpha(static_cast<unsigned char>(text[i+1])) || text[i+1] == '{' || text[i+1] == '(')) {
+                styles[i] = 'G';
+                size_t var_start = ++i;
+                if (text[i] == '{') {
+                    while (i < text.length() && text[i] != '}') i++;
+                    if (i < text.length()) i++;
+                } else if (text[i] == '(') {
+                    while (i < text.length() && text[i] != ')') i++;
+                    if (i < text.length()) i++;
+                } else {
+                    while (i < text.length() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_')) i++;
+                }
+                for (size_t j = var_start; j < i; ++j) styles[j] = 'G';
+                i--;
+                continue;
+            }
+
+            if (std::isdigit(static_cast<unsigned char>(c))) {
+                size_t start_n = i;
+                while (i < text.length() && (std::isdigit(static_cast<unsigned char>(text[i])) || text[i] == '.')) i++;
+                for (size_t j = start_n; j < i; ++j) styles[j] = 'E';
+                i--;
+                continue;
+            }
+
+            if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
+                size_t start_w = i;
+                while (i < text.length() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_' || text[i] == '-')) i++;
+                std::string word = text.substr(start_w, i - start_w);
+
+                if (word == "if" || word == "fi" || word == "then" || word == "else" || word == "elif" ||
+                    word == "for" || word == "in" || word == "do" || word == "done" || word == "while" ||
+                    word == "until" || word == "case" || word == "esac" || word == "function" ||
+                    word == "return" || word == "exit" || word == "local" || word == "declare" ||
+                    word == "export" || word == "readonly" || word == "source" || word == "set" ||
+                    word == "unset" || word == "shift" || word == "eval" || word == "exec") {
+                    for (size_t j = start_w; j < i; ++j) styles[j] = 'B';
+                } else if (word == "echo" || word == "cd" || word == "pwd" || word == "mkdir" || word == "rm" ||
+                           word == "cp" || word == "mv" || word == "chmod" || word == "chown" || word == "grep" ||
+                           word == "sed" || word == "awk" || word == "cat" || word == "ls" || word == "export") {
+                    for (size_t j = start_w; j < i; ++j) styles[j] = 'F';
+                }
+                i--;
+            }
+        }
+    } else if (lang == "HTML" || lang == "XML/SVG") {
         bool in_tag = false;
         bool in_string = false;
         char string_char = '\0';
@@ -206,7 +337,6 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int n_deleted, int,
         for (size_t i = 0; i < text.length(); ++i) {
             char c = text[i];
 
-            // Comments <!-- ... -->
             if (!in_tag && !in_string && i + 3 < text.length() && text[i] == '<' && text[i+1] == '!' && text[i+2] == '-' && text[i+3] == '-') {
                 while (i < text.length()) {
                     styles[i] = 'C';
@@ -248,61 +378,17 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int n_deleted, int,
                 continue;
             }
 
-            styles[i] = in_tag ? 'B' : 'A';
+            if (in_tag) {
+                styles[i] = std::isspace(static_cast<unsigned char>(c)) ? 'A' : 'B';
+            } else {
+                styles[i] = 'A';
+            }
         }
-    } 
-    else if (is_css) {
-        bool in_comment = false;
-        bool in_string = false;
-        char string_char = '\0';
-
-        for (size_t i = 0; i < text.length(); ++i) {
-            char c = text[i];
-            if (!in_comment && !in_string && i + 1 < text.length() && c == '/' && text[i+1] == '*') {
-                in_comment = true;
-                styles[i] = styles[i+1] = 'C';
-                i++;
-                continue;
-            }
-            if (in_comment) {
-                styles[i] = 'C';
-                if (i + 1 < text.length() && c == '*' && text[i+1] == '/') {
-                    styles[i+1] = 'C';
-                    in_comment = false;
-                    i++;
-                }
-                continue;
-            }
-            if (!in_string && (c == '"' || c == '\'')) {
-                in_string = true;
-                string_char = c;
-                styles[i] = 'D';
-                continue;
-            }
-            if (in_string) {
-                styles[i] = 'D';
-                if (c == string_char) in_string = false;
-                continue;
-            }
-            if (c == '{' || c == '}') {
-                styles[i] = 'B';
-                continue;
-            }
-            if (c == ':') {
-                styles[i] = 'E';
-                continue;
-            }
-            styles[i] = 'A';
-        }
-    }
-    else {
-        // Universal C/C++/Python/JS/Java/Rust/Go/etc Parser
+    } else {
         bool in_single_string = false;
         bool in_double_string = false;
         bool in_triple_single = false;
         bool in_triple_double = false;
-        bool in_block_comment = false;
-        bool in_line_comment = false;
 
         auto is_escaped = [](const std::string& s, size_t idx) {
             if (idx == 0) return false;
@@ -317,36 +403,14 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int n_deleted, int,
         for (size_t i = 0; i < text.length(); ++i) {
             char c = text[i];
 
-            if (c == '\n') {
-                in_line_comment = false;
-                styles[i] = 'A';
-                continue;
-            }
-
-            if (in_line_comment) {
-                styles[i] = 'C';
-                continue;
-            }
-
-            if (in_block_comment) {
-                styles[i] = 'C';
-                if (i + 1 < text.length() && c == '*' && text[i+1] == '/') {
-                    styles[i+1] = 'C';
-                    in_block_comment = false;
-                    i++;
-                }
-                continue;
-            }
-
-            // Triple quotes (Python, etc.)
             if (!in_single_string && !in_double_string) {
-                if (!in_triple_single && i + 2 < text.length() && c == '"' && text[i+1] == '"' && text[i+2] == '"') {
+                if (!in_triple_single && i + 2 < text.length() && text[i] == '"' && text[i+1] == '"' && text[i+2] == '"') {
                     in_triple_double = !in_triple_double;
                     styles[i] = styles[i+1] = styles[i+2] = 'D';
                     i += 2;
                     continue;
                 }
-                if (!in_triple_double && i + 2 < text.length() && c == '\'' && text[i+1] == '\'' && text[i+2] == '\'') {
+                if (!in_triple_double && i + 2 < text.length() && text[i] == '\'' && text[i+1] == '\'' && text[i+2] == '\'') {
                     in_triple_single = !in_triple_single;
                     styles[i] = styles[i+1] = styles[i+2] = 'D';
                     i += 2;
@@ -359,38 +423,17 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int n_deleted, int,
                 continue;
             }
 
-            // Comments
             if (!in_single_string && !in_double_string) {
-                if (i + 1 < text.length() && c == '/' && text[i+1] == '/') {
-                    in_line_comment = true;
-                    styles[i] = styles[i+1] = 'C';
-                    i++;
-                    continue;
-                }
-                if (i + 1 < text.length() && c == '/' && text[i+1] == '*') {
-                    in_block_comment = true;
-                    styles[i] = styles[i+1] = 'C';
-                    i++;
-                    continue;
-                }
-                if (!is_python && !is_shell && c == '#') {
-                    // preprocessor or macro in C/C++
-                    size_t idx = i;
-                    while (idx < text.length() && text[idx] != '\n') {
-                        styles[idx] = 'E';
-                        idx++;
+                if ((c == '/' && i + 1 < text.length() && text[i+1] == '/') || c == '#') {
+                    while (i < text.length() && text[i] != '\n') {
+                        styles[i] = 'C';
+                        i++;
                     }
-                    i = idx - 1;
-                    continue;
-                }
-                if ((is_python || is_shell) && c == '#') {
-                    in_line_comment = true;
-                    styles[i] = 'C';
+                    if (i < text.length()) styles[i] = 'C';
                     continue;
                 }
             }
 
-            // Strings
             if (!in_double_string && c == '\'' && !is_escaped(text, i)) {
                 in_single_string = !in_single_string;
                 styles[i] = 'D';
@@ -406,46 +449,40 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int n_deleted, int,
                 continue;
             }
 
-            // Numbers
-            if (std::isdigit(static_cast<unsigned char>(c)) && (i == 0 || !std::isalnum(static_cast<unsigned char>(text[i-1])))) {
+            if (std::isdigit(static_cast<unsigned char>(c))) {
                 size_t start_n = i;
-                while (i < text.length() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '.')) i++;
-                for (size_t j = start_n; j < i; ++j) styles[j] = 'E';
+                while (i < text.length() && (std::isdigit(static_cast<unsigned char>(text[i])) || text[i] == '.')) i++;
+                for (size_t j = start_n; j < i; ++j) styles[j] = 'E'; 
                 i--;
                 continue;
             }
 
-            // Keywords & Identifiers
             if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
                 size_t start_w = i;
                 while (i < text.length() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_')) i++;
                 std::string word = text.substr(start_w, i - start_w);
-
-                // Comprehensive keyword set covering C, C++, Python, JS, Java, C#, Go, Rust, PHP, Ruby, etc.
-                if (word == "class" || word == "struct" || word == "int" || word == "void" || 
-                    word == "return" || word == "if" || word == "else" || word == "for" || 
-                    word == "while" || word == "include" || word == "using" || word == "namespace" ||
-                    word == "bool" || word == "true" || word == "false" || word == "const" || 
-                    word == "public" || word == "private" || word == "protected" || word == "auto" || 
-                    word == "float" || word == "double" || word == "char" || word == "string" ||
-                    word == "def" || word == "import" || word == "from" || word == "print" ||
-                    word == "True" || word == "False" || word == "None" || word == "in" || 
-                    word == "and" || word == "or" || word == "not" || word == "as" || 
-                    word == "with" || word == "try" || word == "except" || word == "elif" ||
-                    word == "is" || word == "lambda" || word == "global" || word == "pass" ||
-                    word == "yield" || word == "raise" || word == "finally" || word == "assert" ||
-                    word == "function" || word == "var" || word == "let" || word == "const" ||
-                    word == "new" || word == "typeof" || word == "instanceof" || word == "package" ||
-                    word == "interface" || word == "implements" || word == "extends" || word == "fn" ||
-                    word == "pub" || word == "mod" || word == "use" || word == "crate" || word == "mut") {
-                    for (size_t j = start_w; j < i; ++j) styles[j] = 'B';
+                
+                if (word == "class" || word == "struct" || word == "return" || word == "if" || 
+                    word == "else" || word == "for" || word == "while" || word == "include" || 
+                    word == "using" || word == "namespace" || word == "const" || word == "public" || 
+                    word == "private" || word == "auto" || word == "def" || word == "import" || 
+                    word == "from" || word == "print" || word == "True" || word == "False" || 
+                    word == "None" || word == "in" || word == "and" || word == "or" || 
+                    word == "not" || word == "as" || word == "with" || word == "try" || 
+                    word == "except" || word == "elif" || word == "is" || word == "lambda" || 
+                    word == "global" || word == "pass" || word == "yield" || word == "raise" ||
+                    word == "function" || word == "var" || word == "let" || word == "const") {
+                    for (size_t j = start_w; j < i; ++j) styles[j] = 'B'; 
+                } else if (word == "int" || word == "void" || word == "bool" || word == "float" || 
+                           word == "double" || word == "char" || word == "string") {
+                    for (size_t j = start_w; j < i; ++j) styles[j] = 'F';
                 }
                 i--;
             }
         }
     }
 
-    sbuf->replace(0, sbuf->length(), styles.c_str());
+    sbuf->replace(start, end, styles.c_str());
 }
 
 void TextEditorApp::buffer_modified_cb(int, int n_inserted, int n_deleted, int, const char*, void* cb_arg) {
@@ -468,25 +505,6 @@ void TextEditorApp::update_tab_label(TabData* tab) {
     if (tab->tabs) tab->tabs->redraw();
 }
 
-std::string TextEditorApp::get_language_name(const std::string& path) {
-    size_t dot = path.find_last_of('.');
-    if (dot == std::string::npos) return "Plain Text";
-    std::string ext = path.substr(dot + 1);
-    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-
-    if (ext == "py") return "Python";
-    if (ext == "cpp" || ext == "cc" || ext == "cxx" || ext == "hpp") return "C++";
-    if (ext == "c" || ext == "h") return "C";
-    if (ext == "js" || ext == "ts") return "JavaScript";
-    if (ext == "html" || ext == "htm" || ext == "xhtml") return "HTML";
-    if (ext == "xml" || ext == "svg" || ext == "ui") return "XML/SVG";
-    if (ext == "css") return "CSS";
-    if (ext == "json") return "JSON";
-    if (ext == "md" || ext == "srt") return "Markdown/Subtitle";
-    if (ext == "sh") return "Shell Script";
-    return ext;
-}
-
 void TextEditorApp::update_status_bar() {
     Fl_Widget* current_tab = tabs_->value();
     if (!current_tab) {
@@ -501,7 +519,11 @@ void TextEditorApp::update_status_bar() {
             int start_of_line = tab->buffer->line_start(pos);
             int col = pos - start_of_line + 1;
 
-            std::string lang = get_language_name(tab->filepath);
+            char* sample_raw = tab->buffer->text_range(0, 512);
+            std::string sample = sample_raw ? sample_raw : "";
+            std::free(sample_raw);
+
+            std::string lang = get_language_name(tab->filepath, sample);
 
             char status_buf[512];
             snprintf(status_buf, sizeof(status_buf), " Ln %d, Col %d  |  UTF-8  |  %s  |  Path: %s", line, col, lang.c_str(), tab->filepath.c_str());
@@ -549,7 +571,6 @@ void TextEditorApp::load_directory(const std::string& dir) {
             }
             std::string filename = files[i]->d_name;
             
-            // Exclude ".", "..", and "./" completely from the browser
             if (filename == "." || filename == ".." || filename == "./") {
                 std::free(files[i]);
                 continue;
@@ -570,14 +591,12 @@ void TextEditorApp::load_directory(const std::string& dir) {
         }
         std::free(files);
 
-        // Add folders first
         for (const auto& folder : folder_list) {
             file_browser_->add(folder.c_str());
             int idx = file_browser_->size();
             file_browser_->icon(idx, file_browser_->folder_icon_);
         }
 
-        // Then add files
         for (const auto& file : file_list) {
             file_browser_->add(file.c_str());
             int idx = file_browser_->size();
@@ -989,6 +1008,8 @@ void TextEditorApp::new_file() {
     Fl_Text_Buffer* stylebuf = new Fl_Text_Buffer();
 
     editor->buffer(textbuf);
+    textbuf->tab_distance(4); // FIXED: Called on Fl_Text_Buffer instead of Fl_Text_Editor
+
     editor->color(editor_bg);
     editor->textcolor(editor_text);
     editor->textfont(FL_COURIER);
@@ -1001,7 +1022,7 @@ void TextEditorApp::new_file() {
     stylebuf->text(std::string(textbuf->length(), 'A').c_str());
     TabData* tab_data = new TabData{grp, editor, textbuf, stylebuf, candidate_path, candidate_name, true, tabs_};
 
-    editor->highlight_data(stylebuf, style_table_, 5, 'A', 0, 0);
+    editor->highlight_data(stylebuf, style_table_, 7, 'A', 0, 0);
     style_update_cb(0, textbuf->length(), 0, 0, 0, tab_data);
     
     textbuf->add_modify_callback(style_update_cb, tab_data);
@@ -1068,6 +1089,8 @@ void TextEditorApp::open_file(const std::string& path, bool focus_editor) {
     Fl_Text_Buffer* stylebuf = new Fl_Text_Buffer();
 
     editor->buffer(textbuf);
+    textbuf->tab_distance(4); // FIXED: Called on Fl_Text_Buffer instead of Fl_Text_Editor
+
     editor->color(editor_bg);
     editor->textcolor(editor_text);
     editor->textfont(FL_COURIER);
@@ -1082,7 +1105,7 @@ void TextEditorApp::open_file(const std::string& path, bool focus_editor) {
     stylebuf->text(std::string(textbuf->length(), 'A').c_str());
     TabData* tab_data = new TabData{grp, editor, textbuf, stylebuf, abs_path, fname, false, tabs_};
 
-    editor->highlight_data(stylebuf, style_table_, 5, 'A', 0, 0);
+    editor->highlight_data(stylebuf, style_table_, 7, 'A', 0, 0);
     style_update_cb(0, textbuf->length(), 0, 0, 0, tab_data);
     
     textbuf->add_modify_callback(style_update_cb, tab_data);
@@ -1106,8 +1129,14 @@ bool TextEditorApp::save_tab(TabData* tab) {
     std::ofstream file(tab->filepath.c_str());
     if (file.is_open()) {
         char* text = tab->buffer->text();
-        file << (text ? text : "");
+        std::string content = text ? text : "";
         free(text);
+
+        if (!content.empty() && content.back() != '\n') {
+            content += '\n';
+        }
+
+        file << content;
         file.close();
         if (!file) {
             fl_alert("Error: Could not save file %s", tab->filepath.c_str());

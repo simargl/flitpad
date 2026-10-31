@@ -13,16 +13,7 @@
 
 class TextEditorApp;
 
-struct TabData {
-    Fl_Group* group;
-    Fl_Text_Editor* editor;
-    Fl_Text_Buffer* buffer;
-    Fl_Text_Buffer* style_buffer;
-    std::string filepath;
-    std::string filename;
-    bool is_modified;
-    Fl_Tabs* tabs;
-};
+struct TabData;
 
 class CustomFileBrowser : public Fl_Browser {
 public:
@@ -40,7 +31,7 @@ public:
     CustomTabs(int x, int y, int w, int h, const char* l = 0) : Fl_Tabs(x, y, w, h, l) {}
 };
 
-class FindReplaceDialog; // Forward declaration
+class FindReplaceDialog;
 
 class TextEditorApp : public Fl_Double_Window {
 public:
@@ -53,7 +44,7 @@ public:
     FindReplaceDialog* find_dialog_;
     FindReplaceDialog* replace_dialog_;
 
-    static Fl_Text_Editor::Style_Table_Entry style_table_[5];
+    static Fl_Text_Editor::Style_Table_Entry style_table_[7];
 
     TextEditorApp(int width, int height, const char* title);
     virtual ~TextEditorApp();
@@ -93,7 +84,8 @@ public:
     static void poll_commands_cb(void* data);
     static void style_update_cb(int pos, int n_inserted, int n_deleted, int n_restored, const char* deleted_text, void* cb_arg);
     static void buffer_modified_cb(int pos, int n_inserted, int n_deleted, int n_restored, const char* deleted_text, void* cb_arg);
-    static std::string get_language_name(const std::string& path);
+    static std::string detect_language_by_content_or_extension(const std::string& path, const std::string& content);
+    static std::string get_language_name(const std::string& path, const std::string& content = "");
     static void tabs_cb(Fl_Widget* w, void* data);
     static void browser_cb(Fl_Widget* w, void* data);
     static void window_close_cb(Fl_Widget* w, void* data);
