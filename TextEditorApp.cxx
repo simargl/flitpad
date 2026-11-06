@@ -87,7 +87,7 @@ int CustomFileBrowser::handle(int event) {
     return Fl_Browser::handle(event);
 }
 
-// Professional IDE Theme Style Table (One Dark / VS Code inspired)
+// Professional IDE Theme Style Table (One Dark / VS Code inspired with Distinct Bright Slate Comments)
 Fl_Text_Editor::Style_Table_Entry TextEditorApp::style_table_[7] = {
     { fl_rgb_color(220, 223, 228), FL_COURIER, 17, 0 }, // 'A' - Plain Text
     { fl_rgb_color(198, 120, 221), FL_COURIER, 17, 0 }, // 'B' - Keywords (if, else, return, func, fn, proc)
@@ -172,7 +172,12 @@ std::string TextEditorApp::detect_language_by_content_or_extension(const std::st
             if (first_line.find("node") != std::string::npos) return "JavaScript";
         }
 
-        // Structural signature sniffing for complete language coverage
+        // XML Content Sniffing (checks for <?xml declaration or standard xml root tags even without extension)
+        if (content.rfind("<?xml", 0) == 0 || content.find("<?xml version=") != std::string::npos || 
+            (content.find("<") != std::string::npos && content.find("xmlns=") != std::string::npos)) {
+            return "XML/SVG";
+        }
+
         if (content.find("package main") != std::string::npos || content.find("func main()") != std::string::npos) return "Go";
         if (content.find("fn main()") != std::string::npos || content.find("let mut ") != std::string::npos) return "Rust";
         if (content.find("proc main*()") != std::string::npos || content.find("echo(\"") != std::string::npos) return "Nim";
@@ -201,7 +206,7 @@ std::string TextEditorApp::detect_language_by_content_or_extension(const std::st
     if (ext == "cpp" || ext == "cc" || ext == "cxx" || ext == "hpp") return "C++";
     if (ext == "c" || ext == "h") return "C";
     if (ext == "html" || ext == "htm" || ext == "xhtml") return "HTML";
-    if (ext == "xml" || ext == "svg" || ext == "ui") return "XML/SVG";
+    if (ext == "xml" || ext == "svg" || ext == "ui" || ext == "plist" || ext == "manifest") return "XML/SVG";
     if (ext == "css") return "CSS";
     if (ext == "json") return "JSON";
     if (ext == "md" || ext == "markdown") return "Markdown/Subtitle";
@@ -232,10 +237,11 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
     int text_len = end - start;
     if (text_len <= 0) return;
 
-    char* raw_text = buf->text_range(start, end);
-    std::string text = raw_text ? raw_text : "";
-    std::free(raw_text);
-    std::string styles(text.length(), 'A');
+    char* full_raw_text = buf->text_range(0, end);
+    std::string full_text = full_raw_text ? full_raw_text : "";
+    std::free(full_raw_text);
+
+    std::string full_styles(full_text.length(), 'A');
 
     char* full_doc_raw = buf->text_range(0, std::min(length, 512));
     std::string full_doc = full_doc_raw ? full_doc_raw : "";
@@ -244,7 +250,7 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
     std::string lang = detect_language_by_content_or_extension(tab->filepath, full_doc);
 
     if (lang == "Plain Text") {
-        sbuf->replace(start, end, styles.c_str());
+        sbuf->replace(start, end, std::string(text_len, 'A').c_str());
         return;
     }
 
@@ -252,50 +258,58 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
         bool in_single = false;
         bool in_double = false;
 
-        for (size_t i = 0; i < text.length(); ++i) {
-            char c = text[i];
+        for (size_t i = 0; i < full_text.length(); ++i) {
+            char c = full_text[i];
 
             if (!in_single && !in_double && c == '#') {
-                while (i < text.length() && text[i] != '\n') {
-                    styles[i] = 'C';
+                while (i < full_text.length() && full_text[i] != '\n') {
+                    full_styles[i] = 'C';
                     i++;
                 }
-                if (i < text.length()) styles[i] = 'C';
+                if (i < full_text.length()) full_styles[i] = 'C';
                 continue;
             }
 
             if (!in_double && c == '\'') {
                 in_single = !in_single;
-                styles[i] = 'D';
+                full_styles[i] = 'D';
                 continue;
             }
             if (!in_single && c == '"') {
                 in_double = !in_double;
-                styles[i] = 'D';
+                full_styles[i] = 'D';
                 continue;
             }
 
             if (in_single || in_double) {
-                styles[i] = 'D';
+                full_styles[i] = 'D';
                 continue;
             }
 
             if (std::isdigit(static_cast<unsigned char>(c))) {
                 size_t start_n = i;
-                while (i < text.length() && (std::isdigit(static_cast<unsigned char>(text[i])) || text[i] == '.')) i++;
-                for (size_t j = start_n; j < i; ++j) styles[j] = 'E';
+                while (i < full_text.length() && (std::isdigit(static_cast<unsigned char>(full_text[i])) || full_text[i] == '.')) i++;
+                for (size_t j = start_n; j < i; ++j) full_styles[j] = 'E';
                 i--;
                 continue;
             }
 
             if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
                 size_t start_w = i;
-                while (i < text.length() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_' || text[i] == '-')) i++;
-                std::string word = text.substr(start_w, i - start_w);
+                while (i < full_text.length() && (std::isalnum(static_cast<unsigned char>(full_text[i])) || full_text[i] == '_' || full_text[i] == '-')) i++;
+                std::string word = full_text.substr(start_w, i - start_w);
 
                 if (word == "if" || word == "fi" || word == "then" || word == "else" || word == "elif" ||
-                    word == "for" || word == "in" || word == "do" || word == "done" || word == "while") {
-                    for (size_t j = start_w; j < i; ++j) styles[j] = 'B';
+                    word == "for" || word == "in" || word == "do" || word == "done" || word == "while" ||
+                    word == "until" || word == "case" || word == "esac" || word == "function" ||
+                    word == "return" || word == "exit" || word == "local" || word == "declare" ||
+                    word == "export" || word == "readonly" || word == "source" || word == "set" ||
+                    word == "unset" || word == "shift" || word == "eval" || word == "exec") {
+                    for (size_t j = start_w; j < i; ++j) full_styles[j] = 'B';
+                } else if (word == "echo" || word == "cd" || word == "pwd" || word == "mkdir" || word == "rm" ||
+                           word == "cp" || word == "mv" || word == "chmod" || word == "chown" || word == "grep" ||
+                           word == "sed" || word == "awk" || word == "cat" || word == "ls") {
+                    for (size_t j = start_w; j < i; ++j) full_styles[j] = 'F';
                 }
                 i--;
             }
@@ -305,15 +319,15 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
         bool in_string = false;
         char string_char = '\0';
 
-        for (size_t i = 0; i < text.length(); ++i) {
-            char c = text[i];
+        for (size_t i = 0; i < full_text.length(); ++i) {
+            char c = full_text[i];
 
-            if (!in_tag && !in_string && i + 3 < text.length() && text[i] == '<' && text[i+1] == '!' && text[i+2] == '-' && text[i+3] == '-') {
-                while (i < text.length()) {
-                    styles[i] = 'C';
-                    if (i + 2 < text.length() && text[i] == '-' && text[i+1] == '-' && text[i+2] == '>') {
-                        styles[i+1] = 'C';
-                        styles[i+2] = 'C';
+            if (!in_tag && !in_string && i + 3 < full_text.length() && full_text[i] == '<' && full_text[i+1] == '!' && full_text[i+2] == '-' && full_text[i+3] == '-') {
+                while (i < full_text.length()) {
+                    full_styles[i] = 'C';
+                    if (i + 2 < full_text.length() && full_text[i] == '-' && full_text[i+1] == '-' && full_text[i+2] == '>') {
+                        full_styles[i+1] = 'C';
+                        full_styles[i+2] = 'C';
                         i += 2;
                         break;
                     }
@@ -326,36 +340,35 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
                 if (!in_string && (c == '"' || c == '\'')) {
                     in_string = true;
                     string_char = c;
-                    styles[i] = 'D';
+                    full_styles[i] = 'D';
                     continue;
                 } else if (in_string && c == string_char) {
                     in_string = false;
-                    styles[i] = 'D';
+                    full_styles[i] = 'D';
                     continue;
                 } else if (in_string) {
-                    styles[i] = 'D';
+                    full_styles[i] = 'D';
                     continue;
                 }
             }
 
             if (c == '<') {
                 in_tag = true;
-                styles[i] = 'B';
+                full_styles[i] = 'B';
                 continue;
             }
             if (c == '>') {
                 in_tag = false;
-                styles[i] = 'B';
+                full_styles[i] = 'B';
                 continue;
             }
 
-            styles[i] = in_tag ? 'B' : 'A';
+            full_styles[i] = in_tag ? 'B' : 'A';
         }
     } else {
-        // Universal Tokenization Engine supporting JavaScript, TypeScript, Nim, Python, Go, Rust, Vala, C#, Java, SQL, C++
         bool in_single_string = false;
         bool in_double_string = false;
-        bool in_backtick_string = false; // Essential for JS template literals
+        bool in_backtick_string = false;
         bool in_triple_single = false;
         bool in_triple_double = false;
 
@@ -369,76 +382,74 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
             return (count % 2 != 0);
         };
 
-        for (size_t i = 0; i < text.length(); ++i) {
-            char c = text[i];
+        for (size_t i = 0; i < full_text.length(); ++i) {
+            char c = full_text[i];
 
             if (!in_single_string && !in_double_string && !in_backtick_string) {
-                if (!in_triple_single && i + 2 < text.length() && text[i] == '"' && text[i+1] == '"' && text[i+2] == '"') {
+                if (!in_triple_single && i + 2 < full_text.length() && full_text[i] == '"' && full_text[i+1] == '"' && full_text[i+2] == '"') {
                     in_triple_double = !in_triple_double;
-                    styles[i] = styles[i+1] = styles[i+2] = 'D';
+                    full_styles[i] = full_styles[i+1] = full_styles[i+2] = 'D';
                     i += 2;
                     continue;
                 }
-                if (!in_triple_double && i + 2 < text.length() && text[i] == '\'' && text[i+1] == '\'' && text[i+2] == '\'') {
+                if (!in_triple_double && i + 2 < full_text.length() && full_text[i] == '\'' && full_text[i+1] == '\'' && full_text[i+2] == '\'') {
                     in_triple_single = !in_triple_single;
-                    styles[i] = styles[i+1] = styles[i+2] = 'D';
+                    full_styles[i] = full_styles[i+1] = full_styles[i+2] = 'D';
                     i += 2;
                     continue;
                 }
             }
 
             if (in_triple_double || in_triple_single) {
-                styles[i] = 'D';
+                full_styles[i] = 'D';
                 continue;
             }
 
-            // Comments (// line comments, # Python/Nim comments, SQL -- comments)
             if (!in_single_string && !in_double_string && !in_backtick_string) {
-                if ((c == '/' && i + 1 < text.length() && text[i+1] == '/') || c == '#' || (c == '-' && i + 1 < text.length() && text[i+1] == '-')) {
-                    while (i < text.length() && text[i] != '\n') {
-                        styles[i] = 'C';
+                if ((c == '/' && i + 1 < full_text.length() && full_text[i+1] == '/') || c == '#' || (c == '-' && i + 1 < full_text.length() && full_text[i+1] == '-')) {
+                    while (i < full_text.length() && full_text[i] != '\n') {
+                        full_styles[i] = 'C';
                         i++;
                     }
-                    if (i < text.length()) styles[i] = 'C';
+                    if (i < full_text.length()) full_styles[i] = 'C';
                     continue;
                 }
             }
 
-            if (!in_double_string && !in_backtick_string && c == '\'' && !is_escaped(text, i)) {
+            if (!in_double_string && !in_backtick_string && c == '\'' && !is_escaped(full_text, i)) {
                 in_single_string = !in_single_string;
-                styles[i] = 'D';
+                full_styles[i] = 'D';
                 continue;
             }
-            if (!in_single_string && !in_backtick_string && c == '"' && !is_escaped(text, i)) {
+            if (!in_single_string && !in_backtick_string && c == '"' && !is_escaped(full_text, i)) {
                 in_double_string = !in_double_string;
-                styles[i] = 'D';
+                full_styles[i] = 'D';
                 continue;
             }
-            if (!in_single_string && !in_double_string && c == '`' && !is_escaped(text, i)) { // JS Template Literals
+            if (!in_single_string && !in_double_string && c == '`' && !is_escaped(full_text, i)) {
                 in_backtick_string = !in_backtick_string;
-                styles[i] = 'D';
+                full_styles[i] = 'D';
                 continue;
             }
 
             if (in_single_string || in_double_string || in_backtick_string) {
-                styles[i] = 'D';
+                full_styles[i] = 'D';
                 continue;
             }
 
             if (std::isdigit(static_cast<unsigned char>(c))) {
                 size_t start_n = i;
-                while (i < text.length() && (std::isdigit(static_cast<unsigned char>(text[i])) || text[i] == '.')) i++;
-                for (size_t j = start_n; j < i; ++j) styles[j] = 'E'; 
+                while (i < full_text.length() && (std::isdigit(static_cast<unsigned char>(full_text[i])) || full_text[i] == '.')) i++;
+                for (size_t j = start_n; j < i; ++j) full_styles[j] = 'E'; 
                 i--;
                 continue;
             }
 
             if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
                 size_t start_w = i;
-                while (i < text.length() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_' || text[i] == '!')) i++;
-                std::string word = text.substr(start_w, i - start_w);
+                while (i < full_text.length() && (std::isalnum(static_cast<unsigned char>(full_text[i])) || full_text[i] == '_' || full_text[i] == '!')) i++;
+                std::string word = full_text.substr(start_w, i - start_w);
                 
-                // Comprehensive Keyword & Type collection covering JS, TS, Nim, Python, Go, Rust, C#, Java, SQL, C++
                 if (word == "class" || word == "struct" || word == "return" || word == "if" || 
                     word == "else" || word == "for" || word == "while" || word == "include" || 
                     word == "using" || word == "namespace" || word == "const" || word == "public" || 
@@ -457,7 +468,7 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
                     word == "await" || word == "ref" || word == "type" || word == "proc" ||
                     word == "method" || word == "iterator" || word == "mixin" || word == "concept" ||
                     word == "when" || word == "discard" || word == "export" || word == "interface" ||
-                    word == "implements" || word == "extends" || word == "package" || word == "static" ||
+                    word == "implements" || word == "extends" || word == "static" ||
                     word == "SELECT" || word == "FROM" || word == "WHERE" || word == "INSERT" ||
                     word == "INTO" || word == "UPDATE" || word == "DELETE" || word == "CREATE" ||
                     word == "TABLE" || word == "DROP" || word == "JOIN" || word == "GROUP" ||
@@ -466,7 +477,7 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
                     word == "into" || word == "update" || word == "delete" || word == "create" ||
                     word == "table" || word == "drop" || word == "join" || word == "group" ||
                     word == "order" || word == "by" || word == "having") {
-                    for (size_t j = start_w; j < i; ++j) styles[j] = 'B'; 
+                    for (size_t j = start_w; j < i; ++j) full_styles[j] = 'B'; 
                 } else if (word == "int" || word == "void" || word == "bool" || word == "float" || 
                            word == "double" || word == "char" || word == "string" || word == "i32" ||
                            word == "i64" || word == "u32" || word == "u64" || word == "f32" || 
@@ -474,21 +485,19 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
                            word == "int8" || word == "int16" || word == "int32" || word == "int64" ||
                            word == "uint" || word == "uint8" || word == "uint16" || word == "uint32" ||
                            word == "uint64" || word == "float32" || word == "float64" || word == "byte" ||
-                           word == "rune" || word == "error" || word == "int32" || word == "int64" ||
-                           word == "Number" || word == "String" || word == "Boolean" || word == "any" ||
-                           word == "unknown" || word == "never" || word == "void" || word == "Object" ||
-                           word == "int gew" || word == "int8" || word == "int16" || word == "int32" ||
-                           word == "int64" || word == "uint8" || word == "uint16" || word == "uint32" ||
-                           word == "uint64" || word == "float32" || word == "float64" || word == "json" ||
-                           word == "cstring" || word == "pointer" || word == "ref" || word == "seq") {
-                    for (size_t j = start_w; j < i; ++j) styles[j] = 'F';
+                           word == "rune" || word == "error" || word == "Number" || word == "String" || 
+                           word == "Boolean" || word == "any" || word == "unknown" || word == "never" || 
+                           word == "Object" || word == "json" || word == "cstring" || word == "pointer" || 
+                           word == "seq") {
+                    for (size_t j = start_w; j < i; ++j) full_styles[j] = 'F';
                 }
                 i--;
             }
         }
     }
 
-    sbuf->replace(start, end, styles.c_str());
+    std::string slice_styles = full_styles.substr(start, end - start);
+    sbuf->replace(start, end, slice_styles.c_str());
 }
 
 void TextEditorApp::buffer_modified_cb(int, int n_inserted, int n_deleted, int, const char*, void* cb_arg) {
@@ -1014,7 +1023,7 @@ void TextEditorApp::new_file() {
     Fl_Text_Buffer* stylebuf = new Fl_Text_Buffer();
 
     editor->buffer(textbuf);
-    textbuf->tab_distance(4);
+    textbuf->tab_distance(4); // Hardcoded 4 spaces
 
     editor->color(editor_bg);
     editor->textcolor(editor_text);
@@ -1095,7 +1104,7 @@ void TextEditorApp::open_file(const std::string& path, bool focus_editor) {
     Fl_Text_Buffer* stylebuf = new Fl_Text_Buffer();
 
     editor->buffer(textbuf);
-    textbuf->tab_distance(4);
+    textbuf->tab_distance(4); // Hardcoded 4 spaces
 
     editor->color(editor_bg);
     editor->textcolor(editor_text);
@@ -1138,6 +1147,7 @@ bool TextEditorApp::save_tab(TabData* tab) {
         std::string content = text ? text : "";
         free(text);
 
+        // Geany behavior: ensure trailing newline on save
         if (!content.empty() && content.back() != '\n') {
             content += '\n';
         }
