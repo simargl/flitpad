@@ -227,17 +227,17 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
     Fl_Text_Buffer* sbuf = tab->style_buffer;
 
     int length = buf->length();
+    if (length == 0) {
+        sbuf->text("");
+        return;
+    }
     if (pos > length) pos = length;
     
     int start = buf->line_start(pos);
-    int end = buf->line_end(pos + n_inserted);
-    if (end > length) end = length;
+    int end = length; // Ensure styling propagates to the end of the document
     if (start > end) start = end;
 
-    int text_len = end - start;
-    if (text_len <= 0) return;
-
-    char* full_raw_text = buf->text_range(0, end);
+    char* full_raw_text = buf->text_range(0, length);
     std::string full_text = full_raw_text ? full_raw_text : "";
     std::free(full_raw_text);
 
@@ -250,7 +250,7 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
     std::string lang = detect_language_by_content_or_extension(tab->filepath, full_doc);
 
     if (lang == "Plain Text") {
-        sbuf->replace(start, end, std::string(text_len, 'A').c_str());
+        sbuf->replace(start, length, std::string(length - start, 'A').c_str());
         return;
     }
 
@@ -496,8 +496,8 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
         }
     }
 
-    std::string slice_styles = full_styles.substr(start, end - start);
-    sbuf->replace(start, end, slice_styles.c_str());
+    std::string slice_styles = full_styles.substr(start, length - start);
+    sbuf->replace(start, length, slice_styles.c_str());
 }
 
 void TextEditorApp::buffer_modified_cb(int, int n_inserted, int n_deleted, int, const char*, void* cb_arg) {
