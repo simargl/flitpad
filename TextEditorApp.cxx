@@ -159,6 +159,12 @@ void TextEditorApp::poll_commands_cb(void* data) {
 }
 
 std::string TextEditorApp::detect_language_by_content_or_extension(const std::string& path, const std::string& content) {
+    size_t last_slash = path.find_last_of("/\\");
+    std::string filename = (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
+    
+    if (filename == "Makefile" || filename == "makefile" || filename == "GNUmakefile") return "Makefile";
+    if (filename == "CMakeLists.txt") return "CMake";
+
     if (!content.empty()) {
         size_t newline_idx = content.find('\n');
         std::string first_line = (newline_idx == std::string::npos) ? content : content.substr(0, newline_idx);
@@ -172,7 +178,6 @@ std::string TextEditorApp::detect_language_by_content_or_extension(const std::st
             if (first_line.find("node") != std::string::npos) return "JavaScript";
         }
 
-        // XML Content Sniffing (checks for <?xml declaration or standard xml root tags even without extension)
         if (content.rfind("<?xml", 0) == 0 || content.find("<?xml version=") != std::string::npos || 
             (content.find("<") != std::string::npos && content.find("xmlns=") != std::string::npos)) {
             return "XML/SVG";
@@ -180,9 +185,6 @@ std::string TextEditorApp::detect_language_by_content_or_extension(const std::st
 
         if (content.find("package main") != std::string::npos || content.find("func main()") != std::string::npos) return "Go";
         if (content.find("fn main()") != std::string::npos || content.find("let mut ") != std::string::npos) return "Rust";
-        if (content.find("proc main*()") != std::string::npos || content.find("echo(\"") != std::string::npos) return "Nim";
-        if (content.find("interface ") != std::string::npos && content.find("namespace ") != std::string::npos) return "C#";
-        if (content.find("public static void main") != std::string::npos) return "Java";
         if (content.find("SELECT ") != std::string::npos || content.find("FROM ") != std::string::npos) return "SQL";
         if (content.find("<?php") != std::string::npos) return "PHP";
         if (content.find("<html") != std::string::npos || content.find("<!DOCTYPE html") != std::string::npos) return "HTML";
@@ -198,15 +200,18 @@ std::string TextEditorApp::detect_language_by_content_or_extension(const std::st
     if (ext == "nim" || ext == "nims") return "Nim";
     if (ext == "go") return "Go";
     if (ext == "rs") return "Rust";
-    if (ext == "vala" || ext == "vapi") return "Vala";
     if (ext == "py" || ext == "pyw") return "Python";
+    if (ext == "yaml" || ext == "yml") return "YAML";
+    if (ext == "toml") return "TOML";
+    if (ext == "cmake" || ext == "txt") return "CMake";
+    if (ext == "mk") return "Makefile";
     if (ext == "cs") return "C#";
     if (ext == "java") return "Java";
     if (ext == "sql") return "SQL";
     if (ext == "cpp" || ext == "cc" || ext == "cxx" || ext == "hpp") return "C++";
     if (ext == "c" || ext == "h") return "C";
     if (ext == "html" || ext == "htm" || ext == "xhtml") return "HTML";
-    if (ext == "xml" || ext == "svg" || ext == "ui" || ext == "plist" || ext == "manifest") return "XML/SVG";
+    if (ext == "xml" || ext == "svg" || ext == "ui") return "XML/SVG";
     if (ext == "css") return "CSS";
     if (ext == "json") return "JSON";
     if (ext == "md" || ext == "markdown") return "Markdown/Subtitle";
@@ -234,7 +239,7 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
     if (pos > length) pos = length;
     
     int start = buf->line_start(pos);
-    int end = length; // Ensure styling propagates to the end of the document
+    int end = length; 
     if (start > end) start = end;
 
     char* full_raw_text = buf->text_range(0, length);
@@ -254,7 +259,131 @@ void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const cha
         return;
     }
 
-    if (lang == "Shell Script") {
+    if (lang == "YAML" || lang == "TOML") {
+        bool in_single = false;
+        bool in_double = false;
+
+        for (size_t i = 0; i < full_text.length(); ++i) {
+            char c = full_text[i];
+
+            if (!in_single && !in_double && c == '#') {
+                while (i < full_text.length() && full_text[i] != '\n') {
+                    full_styles[i] = 'C';
+                    i++;
+                }
+                if (i < full_text.length()) full_styles[i] = 'C';
+                continue;
+            }
+
+            if (lang == "TOML" && !in_single && !in_double && c == '[') {
+                while (i < full_text.length() && full_text[i] != '\n') {
+                    full_styles[i] = 'B';
+                    if (full_text[i] == ']') break;
+                    i++;
+                }
+                continue;
+            }
+
+            if (!in_double && c == '\'') {
+                in_single = !in_single;
+                full_styles[i] = 'D';
+                continue;
+            }
+            if (!in_single && c == '"') {
+                in_double = !in_double;
+                full_styles[i] = 'D';
+                continue;
+            }
+            if (in_single || in_double) {
+                full_styles[i] = 'D';
+                continue;
+            }
+
+            if (std::isdigit(static_cast<unsigned char>(c))) {
+                size_t start_n = i;
+                while (i < full_text.length() && (std::isdigit(static_cast<unsigned char>(full_text[i])) || full_text[i] == '.')) i++;
+                for (size_t j = start_n; j < i; ++j) full_styles[j] = 'E';
+                i--;
+                continue;
+            }
+
+            if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
+                size_t start_w = i;
+                while (i < full_text.length() && (std::isalnum(static_cast<unsigned char>(full_text[i])) || full_text[i] == '_' || full_text[i] == '-')) i++;
+                
+                size_t peek = i;
+                while (peek < full_text.length() && (full_text[peek] == ' ' || full_text[peek] == '\t')) peek++;
+                if (peek < full_text.length() && (full_text[peek] == ':' || full_text[peek] == '=')) {
+                    for (size_t j = start_w; j < i; ++j) full_styles[j] = 'F';
+                }
+                i--;
+            }
+        }
+    } else if (lang == "Makefile" || lang == "CMake") {
+        bool in_single = false;
+        bool in_double = false;
+
+        for (size_t i = 0; i < full_text.length(); ++i) {
+            char c = full_text[i];
+
+            if (!in_single && !in_double && c == '#') {
+                while (i < full_text.length() && full_text[i] != '\n') {
+                    full_styles[i] = 'C';
+                    i++;
+                }
+                if (i < full_text.length()) full_styles[i] = 'C';
+                continue;
+            }
+
+            if (c == '$' && i + 1 < full_text.length()) {
+                full_styles[i] = 'G';
+                i++;
+                char next_c = full_text[i];
+                if (next_c == '(' || next_c == '{') {
+                    char close_char = (next_c == '(') ? ')' : '}';
+                    full_styles[i] = 'G';
+                    i++;
+                    while (i < full_text.length() && full_text[i] != close_char && full_text[i] != '\n') {
+                        full_styles[i] = 'G';
+                        i++;
+                    }
+                    if (i < full_text.length()) full_styles[i] = 'G';
+                } else {
+                    full_styles[i] = 'G';
+                }
+                continue;
+            }
+
+            if (!in_double && c == '\'') {
+                in_single = !in_single;
+                full_styles[i] = 'D';
+                continue;
+            }
+            if (!in_single && c == '"') {
+                in_double = !in_double;
+                full_styles[i] = 'D';
+                continue;
+            }
+            if (in_single || in_double) {
+                full_styles[i] = 'D';
+                continue;
+            }
+
+            if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
+                size_t start_w = i;
+                while (i < full_text.length() && (std::isalnum(static_cast<unsigned char>(full_text[i])) || full_text[i] == '_' || full_text[i] == '-')) i++;
+                std::string word = full_text.substr(start_w, i - start_w);
+
+                if (word == "ifeq" || word == "ifneq" || word == "else" || word == "endif" || 
+                    word == "define" || word == "endef" || word == "include" || word == "vpath" ||
+                    word == "project" || word == "add_executable" || word == "add_library" || 
+                    word == "target_link_libraries" || word == "cmake_minimum_required" || word == "find_package") {
+                    for (size_t j = start_w; j < i; ++j) full_styles[j] = 'B';
+                }
+                i--;
+            }
+        }
+    } else if (lang == "Shell Script") {
         bool in_single = false;
         bool in_double = false;
 
@@ -1023,7 +1152,7 @@ void TextEditorApp::new_file() {
     Fl_Text_Buffer* stylebuf = new Fl_Text_Buffer();
 
     editor->buffer(textbuf);
-    textbuf->tab_distance(4); // Hardcoded 4 spaces
+    textbuf->tab_distance(4);
 
     editor->color(editor_bg);
     editor->textcolor(editor_text);
@@ -1104,7 +1233,7 @@ void TextEditorApp::open_file(const std::string& path, bool focus_editor) {
     Fl_Text_Buffer* stylebuf = new Fl_Text_Buffer();
 
     editor->buffer(textbuf);
-    textbuf->tab_distance(4); // Hardcoded 4 spaces
+    textbuf->tab_distance(4);
 
     editor->color(editor_bg);
     editor->textcolor(editor_text);
@@ -1147,7 +1276,6 @@ bool TextEditorApp::save_tab(TabData* tab) {
         std::string content = text ? text : "";
         free(text);
 
-        // Geany behavior: ensure trailing newline on save
         if (!content.empty() && content.back() != '\n') {
             content += '\n';
         }
