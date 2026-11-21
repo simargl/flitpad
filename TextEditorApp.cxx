@@ -3,6 +3,7 @@
 #include "TabData.h"
 #include "Highlighter.h"
 #include "EditHelpers.h"
+#include "PathUtil.h"
 #include <FL/filename.H>
 #include <FL/fl_ask.H>
 #include <FL/Fl_RGB_Image.H>
@@ -164,6 +165,13 @@ std::string TextEditorApp::get_absolute_path(const std::string& path) {
     return cleaned;
 }
 
+// Identity of a file: absolute, symlinks resolved. Two tabs are the same document
+// exactly when their canonical paths are equal. get_absolute_path() is only a
+// lexical clean-up and would treat link/a.txt and real/a.txt as different files.
+std::string TextEditorApp::canonical_path(const std::string& path) {
+    return PathUtil::canonical(get_absolute_path(path));
+}
+
 std::string TextEditorApp::get_session_file_path() { return home_file(".flitpad_session"); }
 std::string TextEditorApp::get_command_file_path() { return home_file(".flitpad_commands"); }
 std::string TextEditorApp::get_lock_file_path() { return home_file(".flitpad_lock"); }
@@ -316,7 +324,7 @@ void TextEditorApp::tabs_cb(Fl_Widget* w, void* data) {
             size_t last_slash = tab->filepath.find_last_of("/\\");
             if (last_slash != std::string::npos && !tab->is_untitled) {
                 std::string dir = tab->filepath.substr(0, last_slash);
-                if (!dir.empty() && dir != self->current_dir_) self->set_current_dir(dir);
+                if (!dir.empty() && self->canonical_path(dir) != self->canonical_path(self->current_dir_)) self->set_current_dir(dir);
             }
             break;
         }
@@ -402,6 +410,8 @@ void TextEditorApp::rename_selected_file() {
 
     std::string old_path = get_absolute_path(join_path(current_dir_, selected));
     std::string new_path = get_absolute_path(join_path(current_dir_, new_name));
+    const bool is_link = PathUtil::is_symlink(old_path);          // renaming a link leaves its target in place
+    const std::string old_id = canonical_path(old_path);          // must be taken before the rename
 
     if (std::rename(old_path.c_str(), new_path.c_str()) != 0) {
         fl_alert("Error: Could not rename file.");
@@ -411,10 +421,10 @@ void TextEditorApp::rename_selected_file() {
     size_t last_slash = new_path.find_last_of("/\\");
     std::string new_fname = (last_slash == std::string::npos) ? new_path : new_path.substr(last_slash + 1);
 
-    for (size_t i = 0; i < open_tabs_.size(); ++i) {
+    for (size_t i = 0; i < open_tabs_.size() && !is_link; ++i) {
         TabData* tab = open_tabs_[i];
-        if (tab->filepath == old_path) {
-            tab->filepath = new_path;
+        if (tab->filepath == old_id) {
+            tab->filepath = canonical_path(new_path);
             tab->filename = new_fname;
             apply_language(tab);
             update_tab_label(tab);
@@ -435,14 +445,16 @@ void TextEditorApp::delete_selected_file() {
     std::string selected = text;
     if (is_parent_entry(selected)) return;
     std::string target_path = get_absolute_path(join_path(current_dir_, selected));
+    const bool is_link = PathUtil::is_symlink(target_path);
+    const std::string target_id = canonical_path(target_path);
 
     if (fl_choice("Are you sure you want to delete %s?", "Cancel", "Delete", 0, selected.c_str()) == 1) {
         if (std::remove(target_path.c_str()) != 0) {
             fl_alert("Error: Could not delete %s.", selected.c_str());
             return;
         }
-        for (size_t i = 0; i < open_tabs_.size(); ++i) {
-            if (open_tabs_[i]->filepath == target_path) {
+        for (size_t i = 0; i < open_tabs_.size() && !is_link; ++i) {
+            if (open_tabs_[i]->filepath == target_id) {
                 destroy_tab(open_tabs_[i]);
                 break;
             }
@@ -469,8 +481,9 @@ void TextEditorApp::browser_cb(Fl_Widget* w, void* data) {
         self->load_directory(target_path);
         fb->take_focus();
     } else {
+        const std::string id = self->canonical_path(target_path);
         for (size_t i = 0; i < self->open_tabs_.size(); ++i) {
-            if (self->open_tabs_[i]->filepath == target_path) {
+            if (self->open_tabs_[i]->filepath == id) {
                 self->tabs_->value(self->open_tabs_[i]->group);
                 self->update_status_bar();
                 fb->take_focus();
@@ -611,12 +624,12 @@ void TextEditorApp::load_session() {
         if (!active_path.empty() && active_path.back() == '\r') active_path.pop_back();
         while (std::getline(file, line)) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
-            if (!line.empty()) session_paths.push_back(get_absolute_path(line));
+            if (!line.empty()) session_paths.push_back(canonical_path(line));
         }
     }
     file.close();
 
-    active_path = active_path.empty() ? "" : get_absolute_path(active_path);
+    active_path = active_path.empty() ? "" : canonical_path(active_path);
     std::vector<std::string> restored;
 
     for (size_t i = 0; i < session_paths.size(); ++i) {
@@ -689,7 +702,7 @@ void TextEditorApp::configure_editor(TabData* tab) {
 // Re-detect the language after the file name changed (rename / save as).
 void TextEditorApp::apply_language(TabData* tab) {
     int len = std::min(tab->buffer->length(), 512);
-    tab->language = Highlighter::detect_language(tab->filepath, buffer_range(tab->buffer, 0, len));
+    tab->language = Highlighter::detect_language(tab->filename, buffer_range(tab->buffer, 0, len));
     configure_editor(tab);
     restyle_tab(tab);
 }
@@ -746,7 +759,7 @@ TabData* TextEditorApp::create_tab(const std::string& path, const std::string& n
     tab->is_untitled = untitled;
     tab->crlf = crlf;
     tab->tabs = tabs_;
-    tab->language = Highlighter::detect_language(path, content.substr(0, 512));
+    tab->language = Highlighter::detect_language(name, content.substr(0, 512));
 
     editor->highlight_data(stylebuf, style_table_, STYLE_COUNT, 'A', 0, 0);
     configure_editor(tab);
@@ -847,14 +860,14 @@ void TextEditorApp::new_file() {
     std::string name = "untitled";
     int counter = 0;
     for (;;) {
-        std::string candidate = get_absolute_path(join_path(current_dir_, name));
+        std::string candidate = canonical_path(join_path(current_dir_, name));
         bool taken = false;
         for (size_t i = 0; i < open_tabs_.size(); ++i)
             if (open_tabs_[i]->filepath == candidate) { taken = true; break; }
         if (!taken) break;
         name = "untitled_" + std::to_string(++counter);
     }
-    TabData* tab = create_tab(get_absolute_path(join_path(current_dir_, name)), name, "", true, false);
+    TabData* tab = create_tab(canonical_path(join_path(current_dir_, name)), name, "", true, false);
     tab->editor->take_focus();
     update_status_bar();
     redraw();
@@ -863,7 +876,8 @@ void TextEditorApp::new_file() {
 void TextEditorApp::open_file(const std::string& path) { open_file(path, true); }
 
 void TextEditorApp::open_file(const std::string& path, bool focus_editor) {
-    std::string abs_path = get_absolute_path(path);
+    const std::string shown_path = get_absolute_path(path);   // as spelled; used for the tab title
+    std::string abs_path = canonical_path(path);              // identity; used for dedupe and saving
 
     for (size_t i = 0; i < open_tabs_.size(); ++i) {
         if (open_tabs_[i]->filepath == abs_path) {
@@ -892,8 +906,8 @@ void TextEditorApp::open_file(const std::string& path, bool focus_editor) {
     bool crlf = content.find("\r\n") != std::string::npos;
     content.erase(std::remove(content.begin(), content.end(), '\r'), content.end());
 
-    size_t last_slash = abs_path.find_last_of("/\\");
-    std::string fname = (last_slash == std::string::npos) ? abs_path : abs_path.substr(last_slash + 1);
+    size_t last_slash = shown_path.find_last_of("/\\");
+    std::string fname = (last_slash == std::string::npos) ? shown_path : shown_path.substr(last_slash + 1);
 
     TabData* tab = create_tab(abs_path, fname, content, false, crlf);
     if (focus_editor) tab->editor->take_focus();
@@ -957,7 +971,7 @@ bool TextEditorApp::save_tab_as(TabData* tab) {
     fc.preset_file(tab->filename.c_str());
     if (fc.show() != 0) return false;
 
-    std::string path = get_absolute_path(fc.filename());
+    std::string path = canonical_path(fc.filename());
     for (size_t i = 0; i < open_tabs_.size(); ++i) {
         if (open_tabs_[i] != tab && open_tabs_[i]->filepath == path) {
             fl_alert("%s is already open in another tab.", path.c_str());
@@ -977,7 +991,8 @@ bool TextEditorApp::save_tab_as(TabData* tab) {
         return false;
     }
     apply_language(tab);
-    if (slash != std::string::npos && slash > 0) set_current_dir(path.substr(0, slash));
+    if (slash != std::string::npos && slash > 0 && path.substr(0, slash) != canonical_path(current_dir_))
+        set_current_dir(path.substr(0, slash));
     update_status_bar();
     return true;
 }

@@ -89,7 +89,8 @@ public:
 
     int handle(int event) override;
 
-    std::string get_absolute_path(const std::string& path);
+    std::string get_absolute_path(const std::string& path);   // lexical: makes absolute, removes ./ and ../
+    std::string canonical_path(const std::string& path);      // file identity: symlinks resolved
     std::string get_session_file_path();
     std::string get_command_file_path();
     std::string get_lock_file_path();

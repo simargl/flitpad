@@ -7,7 +7,7 @@ ALL_CXXFLAGS = -std=c++11 -Wall -Wextra -MMD -MP $(CXXFLAGS) $(shell fltk-config
 LDFLAGS_FLTK = $(shell fltk-config --use-images --ldflags)
 
 TARGET = flitpad
-SRCS   = main.cxx TextEditorApp.cxx FindReplaceDialog.cxx Highlighter.cxx EditHelpers.cxx
+SRCS   = main.cxx TextEditorApp.cxx FindReplaceDialog.cxx Highlighter.cxx EditHelpers.cxx PathUtil.cxx
 OBJS   = $(SRCS:.cxx=.o)
 
 all: $(TARGET)
@@ -19,11 +19,15 @@ $(TARGET): $(OBJS)
 	$(CXX) $(ALL_CXXFLAGS) -c $< -o $@
 
 # Highlighter and EditHelpers don't depend on FLTK, so the tests build without it.
-test: tests/test_highlight
+test: tests/test_highlight tests/test_paths
 	./tests/test_highlight
+	./tests/test_paths
 
 tests/test_highlight: tests/test_highlight.cxx Highlighter.cxx EditHelpers.cxx Highlighter.h EditHelpers.h
 	$(CXX) -std=c++11 -Wall -Wextra $(CXXFLAGS) tests/test_highlight.cxx Highlighter.cxx EditHelpers.cxx -o $@
+
+tests/test_paths: tests/test_paths.cxx PathUtil.cxx PathUtil.h
+	$(CXX) -std=c++11 -Wall -Wextra $(CXXFLAGS) tests/test_paths.cxx PathUtil.cxx -o $@
 
 # ./tests/show_styles <Language> <file> [--runs]  -- prints the highlighter's output
 tests/show_styles: tests/show_styles.cxx Highlighter.cxx Highlighter.h
@@ -34,7 +38,7 @@ install: $(TARGET)
 	install -Dm644 flitpad.png $(DESTDIR)$(PREFIX)/share/icons/hicolor/64x64/apps/flitpad.png
 
 clean:
-	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) tests/test_highlight tests/show_styles
+	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) tests/test_highlight tests/test_paths tests/show_styles
 
 appimage: all
 	rm -rf AppDir

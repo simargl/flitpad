@@ -12,6 +12,7 @@
 * **Smart editing** – auto-indent, extra indent after `{ ( [` (and `:` in Python/YAML), `{|}` splits into an indented block, Tab/Shift+Tab indent and outdent whole selections, Markdown lists/quotes continue on Enter (Enter on an empty item ends the list), comment toggle for every language that has line comments.
 * **File browser sidebar** – open, create, rename (`F2`) and delete (`Delete`) files; `../` navigates up. Keys only act on the sidebar while it has focus.
 * **Find & Replace** – Enter = find next, `F3` / `Shift+F3` repeat the search, the dialog is pre-filled from your selection, Replace All is a single fast edit.
+* **Symlink-safe** – a file is identified by its real path, so opening it through a symlinked directory (or a symlink to the file) never creates a second tab; the same applies to session restore.
 * **Safe file handling** – CRLF files stay CRLF, binary files are refused, new files ask for a name on first save, unsaved-changes prompts on close/quit.
 * **Session restoration** – tabs, active file and window geometry come back after a restart.
 * **Status bar** – line/column, selection size, line ending, language and path; follows the cursor on every key and click.
@@ -67,6 +68,7 @@ sudo make install
 | `TextEditorApp.*` | Main window, tabs, sidebar, file I/O, key handling |
 | `Highlighter.*` | Language detection and syntax highlighting (toolkit independent) |
 | `EditHelpers.*` | Auto-indent, list continuation, comment toggle (toolkit independent) |
+| `PathUtil.*` | Canonical (symlink-resolved) file identity (toolkit independent) |
 | `FindReplaceDialog.*` | Find / Replace window |
 | `CustomTabs.h`, `TabData.h` | Tab widget and per-tab state |
 | `tests/` | `make test`; `tests/show_styles` prints highlighter output for a file |
