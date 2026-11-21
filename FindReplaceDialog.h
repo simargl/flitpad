@@ -5,6 +5,7 @@
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Button.H>
+#include <string>
 
 class TextEditorApp;
 
@@ -21,9 +22,15 @@ private:
     static void replace_cb(Fl_Widget*, void* data);
     static void replace_all_cb(Fl_Widget*, void* data);
     static void close_cb(Fl_Widget*, void* data);
+    static void find_enter_cb(Fl_Widget*, void* data);
+    static void replace_enter_cb(Fl_Widget*, void* data);
 
 public:
     FindReplaceDialog(TextEditorApp* app, bool replace_mode);
+
+    // Pre-fill the search box (selected, so typing replaces it) and focus it.
+    void set_query(const std::string& query);
+    void focus_query();
 
     void do_find_next();
     void do_find_prev();

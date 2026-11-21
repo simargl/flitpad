@@ -1,10 +1,12 @@
 #include "TextEditorApp.h"
 #include "FindReplaceDialog.h"
 #include "TabData.h"
+#include "Highlighter.h"
+#include "EditHelpers.h"
 #include <FL/filename.H>
 #include <FL/fl_ask.H>
-#include <FL/Fl_Menu_Item.H>
 #include <FL/Fl_RGB_Image.H>
+#include <FL/Fl_Native_File_Chooser.H>
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
@@ -12,6 +14,11 @@
 #include <cctype>
 #include <algorithm>
 #include <vector>
+
+static_assert(TextEditorApp::STYLE_COUNT == Highlighter::STYLE_COUNT, "style table size mismatch");
+
+static const int DEFAULT_FONT_SIZE = 17;
+static const int TAB_WIDTH = 4;
 
 // 16x16 XPM Icon for Folders (Gold/Yellow)
 static const char* folder_xpm[] = {
@@ -59,7 +66,7 @@ static const char* file_xpm[] = {
   "                "
 };
 
-CustomFileBrowser::CustomFileBrowser(int x, int y, int w, int h, TextEditorApp* app, const char* l) 
+CustomFileBrowser::CustomFileBrowser(int x, int y, int w, int h, TextEditorApp* app, const char* l)
     : Fl_Browser(x, y, w, h, l), app_(app) {
     folder_icon_ = new Fl_Pixmap(folder_xpm);
     file_icon_ = new Fl_Pixmap(file_xpm);
@@ -87,24 +94,66 @@ int CustomFileBrowser::handle(int event) {
     return Fl_Browser::handle(event);
 }
 
-// Professional IDE Theme Style Table (One Dark / VS Code inspired with Distinct Bright Slate Comments)
-Fl_Text_Editor::Style_Table_Entry TextEditorApp::style_table_[7] = {
-    { fl_rgb_color(220, 223, 228), FL_COURIER, 17, 0 }, // 'A' - Plain Text
-    { fl_rgb_color(198, 120, 221), FL_COURIER, 17, 0 }, // 'B' - Keywords (if, else, return, func, fn, proc)
-    { fl_rgb_color(157, 165, 180), FL_COURIER, 17, 0 }, // 'C' - Comments / Shebang (#...) -> Distinct bright slate
-    { fl_rgb_color(152, 195, 121), FL_COURIER, 17, 0 }, // 'D' - Strings ("...", '...') -> Vibrant Green
-    { fl_rgb_color(209, 154, 102), FL_COURIER, 17, 0 }, // 'E' - Numbers / Constants -> Warm Orange
-    { fl_rgb_color( 97, 175, 239), FL_COURIER, 17, 0 }, // 'F' - Functions / Types / Builtins -> Bright Blue
-    { fl_rgb_color(229, 192, 123), FL_COURIER, 17, 0 }  // 'G' - Variables ($VAR, attributes) -> Golden Yellow
+// One Dark inspired palette. Letters match Highlighter::Style.
+Fl_Text_Editor::Style_Table_Entry TextEditorApp::style_table_[TextEditorApp::STYLE_COUNT] = {
+    { fl_rgb_color(220, 223, 228), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // A plain
+    { fl_rgb_color(198, 120, 221), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // B keywords
+    { fl_rgb_color(157, 165, 180), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // C comments, quotes, ~~strike~~
+    { fl_rgb_color(152, 195, 121), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // D strings
+    { fl_rgb_color(209, 154, 102), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // E numbers, constants
+    { fl_rgb_color( 97, 175, 239), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // F functions, types, keys
+    { fl_rgb_color(229, 192, 123), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // G variables, attributes
+    { fl_rgb_color(224, 108, 117), FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // H markdown headings
+    { fl_rgb_color(209, 154, 102), FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // I markdown bold
+    { fl_rgb_color(198, 120, 221), FL_COURIER_ITALIC, DEFAULT_FONT_SIZE, 0 }, // J markdown italic
+    { fl_rgb_color(152, 195, 121), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // K markdown code
+    { fl_rgb_color( 97, 175, 239), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // L markdown link text
+    { fl_rgb_color( 86, 182, 194), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }  // M markdown markers, urls
 };
+
+static std::string url_decode(const std::string& s) {
+    std::string out;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '%' && i + 2 < s.size() && std::isxdigit(static_cast<unsigned char>(s[i + 1])) &&
+            std::isxdigit(static_cast<unsigned char>(s[i + 2]))) {
+            out += static_cast<char>(std::strtol(s.substr(i + 1, 2).c_str(), 0, 16));
+            i += 2;
+        } else {
+            out += s[i];
+        }
+    }
+    return out;
+}
+
+static std::string home_file(const char* name) {
+    const char* home = getenv("HOME");
+    if (!home) home = getenv("USERPROFILE");
+    if (home) return std::string(home) + "/" + name;
+    return name;
+}
+
+static bool ends_with_slash(const std::string& s) {
+    return !s.empty() && (s[s.size() - 1] == '/' || s[s.size() - 1] == '\\');
+}
+
+static std::string join_path(const std::string& dir, const std::string& name) {
+    std::string p = dir;
+    if (!p.empty() && !ends_with_slash(p)) p += "/";
+    return p + name;
+}
+
+static std::string buffer_range(Fl_Text_Buffer* buf, int a, int b) {
+    char* raw = buf->text_range(a, b);
+    std::string s = raw ? raw : "";
+    std::free(raw);
+    return s;
+}
 
 std::string TextEditorApp::get_absolute_path(const std::string& path) {
     std::string cleaned = path;
     if (cleaned.rfind("file://", 0) == 0) {
-        cleaned = cleaned.substr(7);
-        if (cleaned.rfind("localhost", 0) == 0) {
-            cleaned = cleaned.substr(9);
-        }
+        cleaned = url_decode(cleaned.substr(7));
+        if (cleaned.rfind("localhost", 0) == 0) cleaned = cleaned.substr(9);
     }
 
     char abs_path[1024];
@@ -115,26 +164,9 @@ std::string TextEditorApp::get_absolute_path(const std::string& path) {
     return cleaned;
 }
 
-std::string TextEditorApp::get_session_file_path() {
-    const char* home = getenv("HOME");
-    if (!home) home = getenv("USERPROFILE");
-    if (home) return std::string(home) + "/.flitpad_session";
-    return ".flitpad_session";
-}
-
-std::string TextEditorApp::get_command_file_path() {
-    const char* home = getenv("HOME");
-    if (!home) home = getenv("USERPROFILE");
-    if (home) return std::string(home) + "/.flitpad_commands";
-    return ".flitpad_commands";
-}
-
-std::string TextEditorApp::get_lock_file_path() {
-    const char* home = getenv("HOME");
-    if (!home) home = getenv("USERPROFILE");
-    if (home) return std::string(home) + "/.flitpad_lock";
-    return ".flitpad_lock";
-}
+std::string TextEditorApp::get_session_file_path() { return home_file(".flitpad_session"); }
+std::string TextEditorApp::get_command_file_path() { return home_file(".flitpad_commands"); }
+std::string TextEditorApp::get_lock_file_path() { return home_file(".flitpad_lock"); }
 
 void TextEditorApp::poll_commands_cb(void* data) {
     TextEditorApp* self = static_cast<TextEditorApp*>(data);
@@ -150,483 +182,79 @@ void TextEditorApp::poll_commands_cb(void* data) {
         file.close();
         std::remove(cmd_path.c_str());
 
-        for (const auto& f : files_to_open) {
-            self->open_file(f);
+        for (size_t i = 0; i < files_to_open.size(); ++i) self->open_file(files_to_open[i]);
+        if (!files_to_open.empty()) {
+            self->show();  // raise the window when another instance handed us files
+            self->redraw();
         }
-        if (!files_to_open.empty()) self->redraw();
     }
     Fl::repeat_timeout(0.5, poll_commands_cb, data);
 }
 
-std::string TextEditorApp::detect_language_by_content_or_extension(const std::string& path, const std::string& content) {
-    size_t last_slash = path.find_last_of("/\\");
-    std::string filename = (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
-    
-    if (filename == "Makefile" || filename == "makefile" || filename == "GNUmakefile") return "Makefile";
-    if (filename == "CMakeLists.txt") return "CMake";
-
-    if (!content.empty()) {
-        size_t newline_idx = content.find('\n');
-        std::string first_line = (newline_idx == std::string::npos) ? content : content.substr(0, newline_idx);
-        
-        if (first_line.rfind("#!", 0) == 0) {
-            if (first_line.find("python") != std::string::npos) return "Python";
-            if (first_line.find("bash") != std::string::npos || 
-                first_line.find("sh") != std::string::npos || 
-                first_line.find("zsh") != std::string::npos || 
-                first_line.find("dash") != std::string::npos) return "Shell Script";
-            if (first_line.find("node") != std::string::npos) return "JavaScript";
-        }
-
-        if (content.rfind("<?xml", 0) == 0 || content.find("<?xml version=") != std::string::npos || 
-            (content.find("<") != std::string::npos && content.find("xmlns=") != std::string::npos)) {
-            return "XML/SVG";
-        }
-
-        if (content.find("package main") != std::string::npos || content.find("func main()") != std::string::npos) return "Go";
-        if (content.find("fn main()") != std::string::npos || content.find("let mut ") != std::string::npos) return "Rust";
-        if (content.find("SELECT ") != std::string::npos || content.find("FROM ") != std::string::npos) return "SQL";
-        if (content.find("<?php") != std::string::npos) return "PHP";
-        if (content.find("<html") != std::string::npos || content.find("<!DOCTYPE html") != std::string::npos) return "HTML";
-    }
-
-    size_t dot = path.find_last_of('.');
-    if (dot == std::string::npos) return "Plain Text";
-    std::string ext = path.substr(dot + 1);
-    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-
-    if (ext == "js" || ext == "mjs" || ext == "cjs") return "JavaScript";
-    if (ext == "ts" || ext == "tsx") return "TypeScript";
-    if (ext == "nim" || ext == "nims") return "Nim";
-    if (ext == "go") return "Go";
-    if (ext == "rs") return "Rust";
-    if (ext == "py" || ext == "pyw") return "Python";
-    if (ext == "yaml" || ext == "yml") return "YAML";
-    if (ext == "toml") return "TOML";
-    if (ext == "cmake" || ext == "txt") return "CMake";
-    if (ext == "mk") return "Makefile";
-    if (ext == "cs") return "C#";
-    if (ext == "java") return "Java";
-    if (ext == "sql") return "SQL";
-    if (ext == "cpp" || ext == "cc" || ext == "cxx" || ext == "hpp") return "C++";
-    if (ext == "c" || ext == "h") return "C";
-    if (ext == "html" || ext == "htm" || ext == "xhtml") return "HTML";
-    if (ext == "xml" || ext == "svg" || ext == "ui") return "XML/SVG";
-    if (ext == "css") return "CSS";
-    if (ext == "json") return "JSON";
-    if (ext == "md" || ext == "markdown") return "Markdown/Subtitle";
-    if (ext == "sh" || ext == "bash" || ext == "zsh" || ext == "fish" || ext == "env") return "Shell Script";
-    
-    return "Plain Text";
-}
-
 std::string TextEditorApp::get_language_name(const std::string& path, const std::string& content) {
-    return detect_language_by_content_or_extension(path, content);
+    return Highlighter::detect_language(path, content);
 }
 
-void TextEditorApp::style_update_cb(int pos, int n_inserted, int, int, const char*, void* cb_arg) {
-    TabData* tab = static_cast<TabData*>(cb_arg);
+// ---------------------------------------------------------------------------
+// syntax highlighting plumbing
+// ---------------------------------------------------------------------------
+
+// Re-highlights the whole buffer, but only touches the part of the style buffer
+// that actually changed, so FLTK redraws as little as possible.
+void TextEditorApp::restyle_tab(TabData* tab) {
     if (!tab || !tab->buffer || !tab->style_buffer) return;
+    tab->restyle_pending = false;
 
-    Fl_Text_Buffer* buf = tab->buffer;
     Fl_Text_Buffer* sbuf = tab->style_buffer;
-
-    int length = buf->length();
+    const int length = tab->buffer->length();
     if (length == 0) {
         sbuf->text("");
         return;
     }
-    if (pos > length) pos = length;
-    
-    int start = buf->line_start(pos);
-    int end = length; 
-    if (start > end) start = end;
 
-    char* full_raw_text = buf->text_range(0, length);
-    std::string full_text = full_raw_text ? full_raw_text : "";
-    std::free(full_raw_text);
+    std::string text = buffer_range(tab->buffer, 0, length);
+    std::string styles = Highlighter::highlight(tab->language, text);
+    styles.resize(static_cast<size_t>(length), 'A');
 
-    std::string full_styles(full_text.length(), 'A');
-
-    char* full_doc_raw = buf->text_range(0, std::min(length, 512));
-    std::string full_doc = full_doc_raw ? full_doc_raw : "";
-    std::free(full_doc_raw);
-
-    std::string lang = detect_language_by_content_or_extension(tab->filepath, full_doc);
-
-    if (lang == "Plain Text") {
-        sbuf->replace(start, length, std::string(length - start, 'A').c_str());
+    std::string old_styles = buffer_range(sbuf, 0, sbuf->length());
+    if (old_styles.size() != styles.size()) {
+        sbuf->text(styles.c_str());
         return;
     }
+    size_t first = 0;
+    while (first < styles.size() && styles[first] == old_styles[first]) ++first;
+    if (first == styles.size()) return;  // nothing changed
+    size_t last = styles.size();
+    while (last > first && styles[last - 1] == old_styles[last - 1]) --last;
+    sbuf->replace(static_cast<int>(first), static_cast<int>(last), styles.substr(first, last - first).c_str());
+}
 
-    if (lang == "YAML" || lang == "TOML") {
-        bool in_single = false;
-        bool in_double = false;
+void TextEditorApp::restyle_timeout_cb(void* data) {
+    restyle_tab(static_cast<TabData*>(data));
+}
 
-        for (size_t i = 0; i < full_text.length(); ++i) {
-            char c = full_text[i];
+// Called synchronously on every buffer change. It only keeps the style buffer the
+// same length as the text (new text inherits the style before it, so typing inside
+// a comment does not flicker) and schedules the real work a few ms later.
+void TextEditorApp::style_update_cb(int pos, int n_inserted, int n_deleted, int, const char*, void* cb_arg) {
+    if (n_inserted == 0 && n_deleted == 0) return;  // selection change only
+    TabData* tab = static_cast<TabData*>(cb_arg);
+    if (!tab || !tab->buffer || !tab->style_buffer) return;
 
-            if (!in_single && !in_double && c == '#') {
-                while (i < full_text.length() && full_text[i] != '\n') {
-                    full_styles[i] = 'C';
-                    i++;
-                }
-                if (i < full_text.length()) full_styles[i] = 'C';
-                continue;
-            }
-
-            if (lang == "TOML" && !in_single && !in_double && c == '[') {
-                while (i < full_text.length() && full_text[i] != '\n') {
-                    full_styles[i] = 'B';
-                    if (full_text[i] == ']') break;
-                    i++;
-                }
-                continue;
-            }
-
-            if (!in_double && c == '\'') {
-                in_single = !in_single;
-                full_styles[i] = 'D';
-                continue;
-            }
-            if (!in_single && c == '"') {
-                in_double = !in_double;
-                full_styles[i] = 'D';
-                continue;
-            }
-            if (in_single || in_double) {
-                full_styles[i] = 'D';
-                continue;
-            }
-
-            if (std::isdigit(static_cast<unsigned char>(c))) {
-                size_t start_n = i;
-                while (i < full_text.length() && (std::isdigit(static_cast<unsigned char>(full_text[i])) || full_text[i] == '.')) i++;
-                for (size_t j = start_n; j < i; ++j) full_styles[j] = 'E';
-                i--;
-                continue;
-            }
-
-            if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
-                size_t start_w = i;
-                while (i < full_text.length() && (std::isalnum(static_cast<unsigned char>(full_text[i])) || full_text[i] == '_' || full_text[i] == '-')) i++;
-                
-                size_t peek = i;
-                while (peek < full_text.length() && (full_text[peek] == ' ' || full_text[peek] == '\t')) peek++;
-                if (peek < full_text.length() && (full_text[peek] == ':' || full_text[peek] == '=')) {
-                    for (size_t j = start_w; j < i; ++j) full_styles[j] = 'F';
-                }
-                i--;
-            }
-        }
-    } else if (lang == "Makefile" || lang == "CMake") {
-        bool in_single = false;
-        bool in_double = false;
-
-        for (size_t i = 0; i < full_text.length(); ++i) {
-            char c = full_text[i];
-
-            if (!in_single && !in_double && c == '#') {
-                while (i < full_text.length() && full_text[i] != '\n') {
-                    full_styles[i] = 'C';
-                    i++;
-                }
-                if (i < full_text.length()) full_styles[i] = 'C';
-                continue;
-            }
-
-            if (c == '$' && i + 1 < full_text.length()) {
-                full_styles[i] = 'G';
-                i++;
-                char next_c = full_text[i];
-                if (next_c == '(' || next_c == '{') {
-                    char close_char = (next_c == '(') ? ')' : '}';
-                    full_styles[i] = 'G';
-                    i++;
-                    while (i < full_text.length() && full_text[i] != close_char && full_text[i] != '\n') {
-                        full_styles[i] = 'G';
-                        i++;
-                    }
-                    if (i < full_text.length()) full_styles[i] = 'G';
-                } else {
-                    full_styles[i] = 'G';
-                }
-                continue;
-            }
-
-            if (!in_double && c == '\'') {
-                in_single = !in_single;
-                full_styles[i] = 'D';
-                continue;
-            }
-            if (!in_single && c == '"') {
-                in_double = !in_double;
-                full_styles[i] = 'D';
-                continue;
-            }
-            if (in_single || in_double) {
-                full_styles[i] = 'D';
-                continue;
-            }
-
-            if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
-                size_t start_w = i;
-                while (i < full_text.length() && (std::isalnum(static_cast<unsigned char>(full_text[i])) || full_text[i] == '_' || full_text[i] == '-')) i++;
-                std::string word = full_text.substr(start_w, i - start_w);
-
-                if (word == "ifeq" || word == "ifneq" || word == "else" || word == "endif" || 
-                    word == "define" || word == "endef" || word == "include" || word == "vpath" ||
-                    word == "project" || word == "add_executable" || word == "add_library" || 
-                    word == "target_link_libraries" || word == "cmake_minimum_required" || word == "find_package") {
-                    for (size_t j = start_w; j < i; ++j) full_styles[j] = 'B';
-                }
-                i--;
-            }
-        }
-    } else if (lang == "Shell Script") {
-        bool in_single = false;
-        bool in_double = false;
-
-        for (size_t i = 0; i < full_text.length(); ++i) {
-            char c = full_text[i];
-
-            if (!in_single && !in_double && c == '#') {
-                while (i < full_text.length() && full_text[i] != '\n') {
-                    full_styles[i] = 'C';
-                    i++;
-                }
-                if (i < full_text.length()) full_styles[i] = 'C';
-                continue;
-            }
-
-            if (!in_double && c == '\'') {
-                in_single = !in_single;
-                full_styles[i] = 'D';
-                continue;
-            }
-            if (!in_single && c == '"') {
-                in_double = !in_double;
-                full_styles[i] = 'D';
-                continue;
-            }
-
-            if (in_single || in_double) {
-                full_styles[i] = 'D';
-                continue;
-            }
-
-            if (std::isdigit(static_cast<unsigned char>(c))) {
-                size_t start_n = i;
-                while (i < full_text.length() && (std::isdigit(static_cast<unsigned char>(full_text[i])) || full_text[i] == '.')) i++;
-                for (size_t j = start_n; j < i; ++j) full_styles[j] = 'E';
-                i--;
-                continue;
-            }
-
-            if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
-                size_t start_w = i;
-                while (i < full_text.length() && (std::isalnum(static_cast<unsigned char>(full_text[i])) || full_text[i] == '_' || full_text[i] == '-')) i++;
-                std::string word = full_text.substr(start_w, i - start_w);
-
-                if (word == "if" || word == "fi" || word == "then" || word == "else" || word == "elif" ||
-                    word == "for" || word == "in" || word == "do" || word == "done" || word == "while" ||
-                    word == "until" || word == "case" || word == "esac" || word == "function" ||
-                    word == "return" || word == "exit" || word == "local" || word == "declare" ||
-                    word == "export" || word == "readonly" || word == "source" || word == "set" ||
-                    word == "unset" || word == "shift" || word == "eval" || word == "exec") {
-                    for (size_t j = start_w; j < i; ++j) full_styles[j] = 'B';
-                } else if (word == "echo" || word == "cd" || word == "pwd" || word == "mkdir" || word == "rm" ||
-                           word == "cp" || word == "mv" || word == "chmod" || word == "chown" || word == "grep" ||
-                           word == "sed" || word == "awk" || word == "cat" || word == "ls") {
-                    for (size_t j = start_w; j < i; ++j) full_styles[j] = 'F';
-                }
-                i--;
-            }
-        }
-    } else if (lang == "HTML" || lang == "XML/SVG") {
-        bool in_tag = false;
-        bool in_string = false;
-        char string_char = '\0';
-
-        for (size_t i = 0; i < full_text.length(); ++i) {
-            char c = full_text[i];
-
-            if (!in_tag && !in_string && i + 3 < full_text.length() && full_text[i] == '<' && full_text[i+1] == '!' && full_text[i+2] == '-' && full_text[i+3] == '-') {
-                while (i < full_text.length()) {
-                    full_styles[i] = 'C';
-                    if (i + 2 < full_text.length() && full_text[i] == '-' && full_text[i+1] == '-' && full_text[i+2] == '>') {
-                        full_styles[i+1] = 'C';
-                        full_styles[i+2] = 'C';
-                        i += 2;
-                        break;
-                    }
-                    i++;
-                }
-                continue;
-            }
-
-            if (in_tag) {
-                if (!in_string && (c == '"' || c == '\'')) {
-                    in_string = true;
-                    string_char = c;
-                    full_styles[i] = 'D';
-                    continue;
-                } else if (in_string && c == string_char) {
-                    in_string = false;
-                    full_styles[i] = 'D';
-                    continue;
-                } else if (in_string) {
-                    full_styles[i] = 'D';
-                    continue;
-                }
-            }
-
-            if (c == '<') {
-                in_tag = true;
-                full_styles[i] = 'B';
-                continue;
-            }
-            if (c == '>') {
-                in_tag = false;
-                full_styles[i] = 'B';
-                continue;
-            }
-
-            full_styles[i] = in_tag ? 'B' : 'A';
-        }
+    Fl_Text_Buffer* sbuf = tab->style_buffer;
+    if (n_inserted > 0) {
+        char inherit = 'A';
+        if (pos > 0 && pos <= sbuf->length()) inherit = sbuf->byte_at(pos - 1);
+        sbuf->replace(pos, pos + n_deleted, std::string(static_cast<size_t>(n_inserted), inherit).c_str());
     } else {
-        bool in_single_string = false;
-        bool in_double_string = false;
-        bool in_backtick_string = false;
-        bool in_triple_single = false;
-        bool in_triple_double = false;
-
-        auto is_escaped = [](const std::string& s, size_t idx) {
-            if (idx == 0) return false;
-            size_t count = 0, j = idx;
-            while (j > 0 && s[j - 1] == '\\') {
-                count++;
-                j--;
-            }
-            return (count % 2 != 0);
-        };
-
-        for (size_t i = 0; i < full_text.length(); ++i) {
-            char c = full_text[i];
-
-            if (!in_single_string && !in_double_string && !in_backtick_string) {
-                if (!in_triple_single && i + 2 < full_text.length() && full_text[i] == '"' && full_text[i+1] == '"' && full_text[i+2] == '"') {
-                    in_triple_double = !in_triple_double;
-                    full_styles[i] = full_styles[i+1] = full_styles[i+2] = 'D';
-                    i += 2;
-                    continue;
-                }
-                if (!in_triple_double && i + 2 < full_text.length() && full_text[i] == '\'' && full_text[i+1] == '\'' && full_text[i+2] == '\'') {
-                    in_triple_single = !in_triple_single;
-                    full_styles[i] = full_styles[i+1] = full_styles[i+2] = 'D';
-                    i += 2;
-                    continue;
-                }
-            }
-
-            if (in_triple_double || in_triple_single) {
-                full_styles[i] = 'D';
-                continue;
-            }
-
-            if (!in_single_string && !in_double_string && !in_backtick_string) {
-                if ((c == '/' && i + 1 < full_text.length() && full_text[i+1] == '/') || c == '#' || (c == '-' && i + 1 < full_text.length() && full_text[i+1] == '-')) {
-                    while (i < full_text.length() && full_text[i] != '\n') {
-                        full_styles[i] = 'C';
-                        i++;
-                    }
-                    if (i < full_text.length()) full_styles[i] = 'C';
-                    continue;
-                }
-            }
-
-            if (!in_double_string && !in_backtick_string && c == '\'' && !is_escaped(full_text, i)) {
-                in_single_string = !in_single_string;
-                full_styles[i] = 'D';
-                continue;
-            }
-            if (!in_single_string && !in_backtick_string && c == '"' && !is_escaped(full_text, i)) {
-                in_double_string = !in_double_string;
-                full_styles[i] = 'D';
-                continue;
-            }
-            if (!in_single_string && !in_double_string && c == '`' && !is_escaped(full_text, i)) {
-                in_backtick_string = !in_backtick_string;
-                full_styles[i] = 'D';
-                continue;
-            }
-
-            if (in_single_string || in_double_string || in_backtick_string) {
-                full_styles[i] = 'D';
-                continue;
-            }
-
-            if (std::isdigit(static_cast<unsigned char>(c))) {
-                size_t start_n = i;
-                while (i < full_text.length() && (std::isdigit(static_cast<unsigned char>(full_text[i])) || full_text[i] == '.')) i++;
-                for (size_t j = start_n; j < i; ++j) full_styles[j] = 'E'; 
-                i--;
-                continue;
-            }
-
-            if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
-                size_t start_w = i;
-                while (i < full_text.length() && (std::isalnum(static_cast<unsigned char>(full_text[i])) || full_text[i] == '_' || full_text[i] == '!')) i++;
-                std::string word = full_text.substr(start_w, i - start_w);
-                
-                if (word == "class" || word == "struct" || word == "return" || word == "if" || 
-                    word == "else" || word == "for" || word == "while" || word == "include" || 
-                    word == "using" || word == "namespace" || word == "const" || word == "public" || 
-                    word == "private" || word == "protected" || word == "auto" || word == "def" || 
-                    word == "import" || word == "from" || word == "print" || word == "True" || 
-                    word == "False" || word == "None" || word == "in" || word == "and" || 
-                    word == "or" || word == "not" || word == "as" || word == "with" || word == "try" || 
-                    word == "except" || word == "elif" || word == "is" || word == "lambda" || 
-                    word == "global" || word == "pass" || word == "yield" || word == "raise" ||
-                    word == "function" || word == "var" || word == "let" || word == "func" ||
-                    word == "package" || word == "chan" || word == "go" || word == "defer" ||
-                    word == "fallthrough" || word == "range" || word == "select" || word == "fn" ||
-                    word == "mut" || word == "pub" || word == "crate" || word == "mod" || 
-                    word == "trait" || word == "impl" || word == "match" || word == "enum" || 
-                    word == "where" || word == "move" || word == "unsafe" || word == "async" || 
-                    word == "await" || word == "ref" || word == "type" || word == "proc" ||
-                    word == "method" || word == "iterator" || word == "mixin" || word == "concept" ||
-                    word == "when" || word == "discard" || word == "export" || word == "interface" ||
-                    word == "implements" || word == "extends" || word == "static" ||
-                    word == "SELECT" || word == "FROM" || word == "WHERE" || word == "INSERT" ||
-                    word == "INTO" || word == "UPDATE" || word == "DELETE" || word == "CREATE" ||
-                    word == "TABLE" || word == "DROP" || word == "JOIN" || word == "GROUP" ||
-                    word == "ORDER" || word == "BY" || word == "HAVING" || word == "AS" ||
-                    word == "select" || word == "from" || word == "where" || word == "insert" ||
-                    word == "into" || word == "update" || word == "delete" || word == "create" ||
-                    word == "table" || word == "drop" || word == "join" || word == "group" ||
-                    word == "order" || word == "by" || word == "having") {
-                    for (size_t j = start_w; j < i; ++j) full_styles[j] = 'B'; 
-                } else if (word == "int" || word == "void" || word == "bool" || word == "float" || 
-                           word == "double" || word == "char" || word == "string" || word == "i32" ||
-                           word == "i64" || word == "u32" || word == "u64" || word == "f32" || 
-                           word == "f64" || word == "usize" || word == "isize" || word == "str" ||
-                           word == "int8" || word == "int16" || word == "int32" || word == "int64" ||
-                           word == "uint" || word == "uint8" || word == "uint16" || word == "uint32" ||
-                           word == "uint64" || word == "float32" || word == "float64" || word == "byte" ||
-                           word == "rune" || word == "error" || word == "Number" || word == "String" || 
-                           word == "Boolean" || word == "any" || word == "unknown" || word == "never" || 
-                           word == "Object" || word == "json" || word == "cstring" || word == "pointer" || 
-                           word == "seq") {
-                    for (size_t j = start_w; j < i; ++j) full_styles[j] = 'F';
-                }
-                i--;
-            }
-        }
+        sbuf->remove(pos, pos + n_deleted);
     }
 
-    std::string slice_styles = full_styles.substr(start, length - start);
-    sbuf->replace(start, length, slice_styles.c_str());
+    if (!tab->restyle_pending) {
+        tab->restyle_pending = true;
+        double delay = 0.02 + tab->buffer->length() / 4000000.0;  // bigger files re-highlight less eagerly
+        Fl::add_timeout(delay, restyle_timeout_cb, tab);
+    }
 }
 
 void TextEditorApp::buffer_modified_cb(int, int n_inserted, int n_deleted, int, const char*, void* cb_arg) {
@@ -649,32 +277,30 @@ void TextEditorApp::update_tab_label(TabData* tab) {
     if (tab->tabs) tab->tabs->redraw();
 }
 
+void TextEditorApp::set_status_message(const std::string& message) {
+    status_bar_->copy_label((" " + message).c_str());
+    status_bar_->redraw();
+}
+
 void TextEditorApp::update_status_bar() {
-    Fl_Widget* current_tab = tabs_->value();
-    if (!current_tab) {
-        status_bar_->copy_label(" No file open | UTF-8");
+    TabData* tab = get_current_tab();
+    if (!tab) {
+        status_bar_->copy_label(" No file open  |  UTF-8");
         return;
     }
+    Fl_Text_Buffer* buf = tab->buffer;
+    int pos = tab->editor->insert_position();
+    int line = buf->count_lines(0, pos) + 1;
+    int col = buf->count_displayed_characters(buf->line_start(pos), pos) + 1;
 
-    for (auto tab : open_tabs_) {
-        if (tab->group == current_tab) {
-            int pos = tab->editor->insert_position();
-            int line = tab->buffer->count_lines(0, pos) + 1;
-            int start_of_line = tab->buffer->line_start(pos);
-            int col = pos - start_of_line + 1;
+    std::string sel;
+    int s = 0, e = 0;
+    if (buf->selection_position(&s, &e) && e > s) sel = "  |  " + std::to_string(e - s) + " selected";
 
-            char* sample_raw = tab->buffer->text_range(0, 512);
-            std::string sample = sample_raw ? sample_raw : "";
-            std::free(sample_raw);
-
-            std::string lang = get_language_name(tab->filepath, sample);
-
-            char status_buf[512];
-            snprintf(status_buf, sizeof(status_buf), " Ln %d, Col %d  |  UTF-8  |  %s  |  Path: %s", line, col, lang.c_str(), tab->filepath.c_str());
-            status_bar_->copy_label(status_buf);
-            break;
-        }
-    }
+    std::string text = " Ln " + std::to_string(line) + ", Col " + std::to_string(col) + sel + "  |  UTF-8  |  " +
+                       (tab->crlf ? "CRLF" : "LF") + "  |  " + tab->language + "  |  " +
+                       (tab->is_untitled ? std::string("(unsaved)") : tab->filepath);
+    status_bar_->copy_label(text.c_str());
 }
 
 void TextEditorApp::tabs_cb(Fl_Widget* w, void* data) {
@@ -683,15 +309,14 @@ void TextEditorApp::tabs_cb(Fl_Widget* w, void* data) {
     Fl_Widget* current_tab = tabs->value();
     if (!current_tab) return;
 
-    for (auto tab : self->open_tabs_) {
+    for (size_t i = 0; i < self->open_tabs_.size(); ++i) {
+        TabData* tab = self->open_tabs_[i];
         if (tab->group == current_tab) {
             tab->editor->take_focus();
             size_t last_slash = tab->filepath.find_last_of("/\\");
-            if (last_slash != std::string::npos) {
+            if (last_slash != std::string::npos && !tab->is_untitled) {
                 std::string dir = tab->filepath.substr(0, last_slash);
-                if (!dir.empty() && dir != self->current_dir_) {
-                    self->set_current_dir(dir);
-                }
+                if (!dir.empty() && dir != self->current_dir_) self->set_current_dir(dir);
             }
             break;
         }
@@ -699,67 +324,63 @@ void TextEditorApp::tabs_cb(Fl_Widget* w, void* data) {
     self->update_status_bar();
 }
 
+// ---------------------------------------------------------------------------
+// sidebar
+// ---------------------------------------------------------------------------
+
 void TextEditorApp::load_directory(const std::string& dir) {
     file_browser_->clear();
 
     dirent** files = nullptr;
-    int n = fl_filename_list(dir.c_str(), &files, fl_numericsort);
+    int n = fl_filename_list(dir.c_str(), &files, fl_casenumericsort);
     if (n > 0) {
         std::vector<std::string> folder_list;
         std::vector<std::string> file_list;
 
         for (int i = 0; i < n; ++i) {
-            if (!files[i] || !files[i]->d_name) {
-                if (files[i]) std::free(files[i]);
-                continue;
-            }
+            if (!files[i]) continue;
             std::string filename = files[i]->d_name;
-            
-            if (filename == "." || filename == ".." || filename == "./") {
+
+            if (filename == "." || filename == "./") {
                 std::free(files[i]);
                 continue;
             }
 
-            std::string full_path = dir;
-            if (!full_path.empty() && full_path.back() != '/' && full_path.back() != '\\') {
-                full_path += "/";
+            if (filename == ".." || filename == "../") {
+                folder_list.insert(folder_list.begin(), filename);  // keep ".." on top
+                std::free(files[i]);
+                continue;
             }
-            full_path += filename;
 
-            if (fl_filename_isdir(full_path.c_str())) {
-                folder_list.push_back(filename);
-            } else {
-                file_list.push_back(filename);
-            }
+            if (fl_filename_isdir(join_path(dir, filename).c_str())) folder_list.push_back(filename);
+            else file_list.push_back(filename);
             std::free(files[i]);
         }
         std::free(files);
 
-        for (const auto& folder : folder_list) {
-            file_browser_->add(folder.c_str());
-            int idx = file_browser_->size();
-            file_browser_->icon(idx, file_browser_->folder_icon_);
+        for (size_t i = 0; i < folder_list.size(); ++i) {
+            file_browser_->add(folder_list[i].c_str());
+            file_browser_->icon(file_browser_->size(), file_browser_->folder_icon_);
         }
-
-        for (const auto& file : file_list) {
-            file_browser_->add(file.c_str());
-            int idx = file_browser_->size();
-            file_browser_->icon(idx, file_browser_->file_icon_);
+        for (size_t i = 0; i < file_list.size(); ++i) {
+            file_browser_->add(file_list[i].c_str());
+            file_browser_->icon(file_browser_->size(), file_browser_->file_icon_);
         }
     }
 }
+
+void TextEditorApp::set_current_dir(const std::string& dir) {
+    current_dir_ = dir;
+    if (file_browser_) load_directory(current_dir_);
+}
+
+static bool is_parent_entry(const std::string& name) { return name == ".." || name == "../"; }
 
 void TextEditorApp::new_file_in_sidebar() {
     const char* name = fl_input("New file name:", "untitled");
     if (!name || std::string(name).empty()) return;
 
-    std::string path = current_dir_;
-    if (!path.empty() && path[path.length() - 1] != '/' && path[path.length() - 1] != '\\') {
-        path += "/";
-    }
-    path += name;
-    path = get_absolute_path(path);
-
+    std::string path = get_absolute_path(join_path(current_dir_, name));
     std::ofstream outfile(path.c_str());
     outfile.close();
 
@@ -770,28 +391,17 @@ void TextEditorApp::new_file_in_sidebar() {
 void TextEditorApp::rename_selected_file() {
     int line = file_browser_->value();
     if (line <= 0) return;
-
     const char* text = file_browser_->text(line);
     if (!text) return;
 
     std::string selected = text;
-    std::string old_path = current_dir_;
-    if (!old_path.empty() && old_path[old_path.length() - 1] != '/' && old_path[old_path.length() - 1] != '\\') {
-        old_path += "/";
-    }
-    old_path += selected;
+    if (is_parent_entry(selected)) return;
 
-    const char* new_name = fl_input("Rename file to:", selected.c_str());
+    const char* new_name = fl_input("Rename to:", selected.c_str());
     if (!new_name || std::string(new_name).empty()) return;
 
-    std::string new_path = current_dir_;
-    if (!new_path.empty() && new_path[new_path.length() - 1] != '/' && new_path[new_path.length() - 1] != '\\') {
-        new_path += "/";
-    }
-    new_path += new_name;
-
-    old_path = get_absolute_path(old_path);
-    new_path = get_absolute_path(new_path);
+    std::string old_path = get_absolute_path(join_path(current_dir_, selected));
+    std::string new_path = get_absolute_path(join_path(current_dir_, new_name));
 
     if (std::rename(old_path.c_str(), new_path.c_str()) != 0) {
         fl_alert("Error: Could not rename file.");
@@ -801,10 +411,12 @@ void TextEditorApp::rename_selected_file() {
     size_t last_slash = new_path.find_last_of("/\\");
     std::string new_fname = (last_slash == std::string::npos) ? new_path : new_path.substr(last_slash + 1);
 
-    for (auto tab : open_tabs_) {
+    for (size_t i = 0; i < open_tabs_.size(); ++i) {
+        TabData* tab = open_tabs_[i];
         if (tab->filepath == old_path) {
             tab->filepath = new_path;
             tab->filename = new_fname;
+            apply_language(tab);
             update_tab_label(tab);
         }
     }
@@ -817,37 +429,24 @@ void TextEditorApp::rename_selected_file() {
 void TextEditorApp::delete_selected_file() {
     int line = file_browser_->value();
     if (line <= 0) return;
-
     const char* text = file_browser_->text(line);
     if (!text) return;
 
     std::string selected = text;
-    std::string target_path = current_dir_;
-    if (!target_path.empty() && target_path[target_path.length() - 1] != '/' && target_path[target_path.length() - 1] != '\\') {
-        target_path += "/";
-    }
-    target_path += selected;
-    target_path = get_absolute_path(target_path);
+    if (is_parent_entry(selected)) return;
+    std::string target_path = get_absolute_path(join_path(current_dir_, selected));
 
     if (fl_choice("Are you sure you want to delete %s?", "Cancel", "Delete", 0, selected.c_str()) == 1) {
         if (std::remove(target_path.c_str()) != 0) {
-            fl_alert("Error: Could not delete file.");
+            fl_alert("Error: Could not delete %s.", selected.c_str());
             return;
         }
-
-        for (auto it = open_tabs_.begin(); it != open_tabs_.end(); ++it) {
-            if ((*it)->filepath == target_path) {
-                TabData* tab = *it;
-                tabs_->remove(tab->group);
-                delete tab->group;
-                delete tab->buffer;
-                delete tab->style_buffer;
-                delete tab;
-                open_tabs_.erase(it);
+        for (size_t i = 0; i < open_tabs_.size(); ++i) {
+            if (open_tabs_[i]->filepath == target_path) {
+                destroy_tab(open_tabs_[i]);
                 break;
             }
         }
-
         load_directory(current_dir_);
         update_status_bar();
         redraw();
@@ -857,65 +456,53 @@ void TextEditorApp::delete_selected_file() {
 void TextEditorApp::browser_cb(Fl_Widget* w, void* data) {
     TextEditorApp* self = static_cast<TextEditorApp*>(data);
     CustomFileBrowser* fb = static_cast<CustomFileBrowser*>(w);
-    
+
     int line = fb->value();
     if (line <= 0) return;
-
     const char* text = fb->text(line);
     if (!text) return;
 
-    std::string selected = text;
-    std::string target_path = self->current_dir_;
-    if (!target_path.empty() && target_path.back() != '/' && target_path.back() != '\\') {
-        target_path += "/";
-    }
-    target_path += selected;
-    target_path = self->get_absolute_path(target_path);
+    std::string target_path = self->get_absolute_path(join_path(self->current_dir_, text));
 
     if (fl_filename_isdir(target_path.c_str())) {
         self->current_dir_ = target_path;
         self->load_directory(target_path);
         fb->take_focus();
     } else {
-        TabData* target_tab = nullptr;
-        for (auto tab : self->open_tabs_) {
-            if (tab->filepath == target_path) {
-                target_tab = tab;
-                break;
+        for (size_t i = 0; i < self->open_tabs_.size(); ++i) {
+            if (self->open_tabs_[i]->filepath == target_path) {
+                self->tabs_->value(self->open_tabs_[i]->group);
+                self->update_status_bar();
+                fb->take_focus();
+                return;
             }
         }
-        
-        if (target_tab) {
-            self->tabs_->value(target_tab->group);
-            self->update_status_bar();
-            fb->take_focus();
-        } else {
-            self->open_file(target_path, true);
-        }
+        self->open_file(target_path, true);
     }
 }
 
 void TextEditorApp::window_close_cb(Fl_Widget*, void* data) {
-    TextEditorApp* app = static_cast<TextEditorApp*>(data);
-    app->try_quit();
+    static_cast<TextEditorApp*>(data)->try_quit();
 }
 
-TextEditorApp::TextEditorApp(int width, int height, const char* title) 
-    : Fl_Double_Window(width, height, title), find_dialog_(nullptr), replace_dialog_(nullptr) {
-    
-    Fl_Color bg_color = fl_rgb_color(40, 44, 52);        
-    Fl_Color panel_color = fl_rgb_color(33, 37, 43);    
-    Fl_Color text_color = fl_rgb_color(171, 178, 191);  
+// ---------------------------------------------------------------------------
+// construction
+// ---------------------------------------------------------------------------
+
+TextEditorApp::TextEditorApp(int width, int height, const char* title)
+    : Fl_Double_Window(width, height, title), font_size_(DEFAULT_FONT_SIZE),
+      find_dialog_(nullptr), replace_dialog_(nullptr) {
+
+    Fl_Color bg_color = fl_rgb_color(40, 44, 52);
+    Fl_Color panel_color = fl_rgb_color(33, 37, 43);
+    Fl_Color text_color = fl_rgb_color(171, 178, 191);
 
     color(bg_color);
     callback(window_close_cb, this);
 
     char cwd[1024];
-    if (fl_getcwd(cwd, sizeof(cwd))) {
-        current_dir_ = cwd;
-    } else {
-        current_dir_ = ".";
-    }
+    if (fl_getcwd(cwd, sizeof(cwd))) current_dir_ = cwd;
+    else current_dir_ = ".";
     std::replace(current_dir_.begin(), current_dir_.end(), '\\', '/');
 
     file_browser_ = new CustomFileBrowser(10, 10, 220, height - 55, this, nullptr);
@@ -926,6 +513,7 @@ TextEditorApp::TextEditorApp(int width, int height, const char* title)
     file_browser_->callback(browser_cb, this);
 
     CustomTabs* ctabs = new CustomTabs(240, 10, width - 250, height - 55);
+    ctabs->on_middle_click = [this](Fl_Widget* group) { schedule_close(group); };
     tabs_ = ctabs;
     tabs_->box(FL_THIN_UP_BOX);
     tabs_->color(bg_color);
@@ -939,7 +527,7 @@ TextEditorApp::TextEditorApp(int width, int height, const char* title)
     status_bar_->labelsize(12);
     status_bar_->labelcolor(text_color);
     status_bar_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-    
+
     end();
     resizable(tabs_);
 
@@ -983,119 +571,84 @@ TextEditorApp::TextEditorApp(int width, int height, const char* title)
 
 TextEditorApp::~TextEditorApp() {
     Fl::remove_timeout(poll_commands_cb, this);
+    for (size_t i = 0; i < open_tabs_.size(); ++i) Fl::remove_timeout(restyle_timeout_cb, open_tabs_[i]);
     save_session();
     std::remove(get_lock_file_path().c_str());
     std::remove(get_command_file_path().c_str());
 }
 
-void TextEditorApp::set_current_dir(const std::string& dir) {
-    current_dir_ = dir;
-    if (file_browser_) {
-        load_directory(current_dir_);
-    }
-}
+// ---------------------------------------------------------------------------
+// session
+// ---------------------------------------------------------------------------
 
 void TextEditorApp::save_session() {
-    std::string path = get_session_file_path();
-    std::ofstream file(path.c_str());
-    if (file.is_open()) {
-        file << x() << " " << y() << " " << w() << " " << h() << "\n";
-        
-        TabData* current = get_current_tab();
-        std::string current_path = current ? current->filepath : "";
-        file << current_path << "\n";
-        for (auto tab : open_tabs_) {
-            if (!tab->filepath.empty()) {
-                file << tab->filepath << "\n";
-            }
-        }
-        file.close();
+    std::ofstream file(get_session_file_path().c_str());
+    if (!file.is_open()) return;
+    file << x() << " " << y() << " " << w() << " " << h() << "\n";
+
+    TabData* current = get_current_tab();
+    file << ((current && !current->is_untitled) ? current->filepath : std::string()) << "\n";
+    for (size_t i = 0; i < open_tabs_.size(); ++i) {
+        if (!open_tabs_[i]->is_untitled && !open_tabs_[i]->filepath.empty()) file << open_tabs_[i]->filepath << "\n";
     }
 }
 
 void TextEditorApp::load_session() {
-    std::string session_path = get_session_file_path();
-    std::ifstream file(session_path.c_str());
-
+    std::ifstream file(get_session_file_path().c_str());
     if (!file.is_open()) return;
 
     int wx, wy, ww, wh;
     if (file >> wx >> wy >> ww >> wh) {
-        if (ww > 200 && wh > 200) {
-            resize(wx, wy, ww, wh);
-        }
+        if (ww > 200 && wh > 200) resize(wx, wy, ww, wh);
     }
-    
+
     std::string dummy;
     std::getline(file, dummy);
 
-    std::string active_path;
+    std::string active_path, line;
     std::vector<std::string> session_paths;
-    std::string line;
-
     if (std::getline(file, active_path)) {
-        if (!active_path.empty() && active_path.back() == '\r')
-            active_path.pop_back();
-
+        if (!active_path.empty() && active_path.back() == '\r') active_path.pop_back();
         while (std::getline(file, line)) {
-            if (!line.empty() && line.back() == '\r')
-                line.pop_back();
-
-            if (!line.empty())
-                session_paths.push_back(get_absolute_path(line));
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (!line.empty()) session_paths.push_back(get_absolute_path(line));
         }
     }
-
     file.close();
 
     active_path = active_path.empty() ? "" : get_absolute_path(active_path);
-    std::vector<std::string> restored_paths;
+    std::vector<std::string> restored;
 
-    for (const auto& path : session_paths) {
-        std::ifstream check(path.c_str(), std::ios::binary);
+    for (size_t i = 0; i < session_paths.size(); ++i) {
+        std::ifstream check(session_paths[i].c_str(), std::ios::binary);
         if (!check.is_open()) continue;
         check.close();
 
-        open_file(path);
-
-        for (const auto* tab : open_tabs_) {
-            if (tab->filepath == path) {
-                restored_paths.push_back(path);
-                break;
-            }
+        open_file(session_paths[i], false);
+        for (size_t k = 0; k < open_tabs_.size(); ++k) {
+            if (open_tabs_[k]->filepath == session_paths[i]) { restored.push_back(session_paths[i]); break; }
         }
     }
 
-    std::string target_path;
-    for (const auto& path : restored_paths) {
-        if (path == active_path) {
-            target_path = path;
-            break;
-        }
+    std::string target;
+    for (size_t i = 0; i < restored.size(); ++i) {
+        if (restored[i] == active_path) { target = restored[i]; break; }
     }
+    if (target.empty() && !restored.empty()) target = restored.front();
 
-    if (target_path.empty() && !restored_paths.empty())
-        target_path = restored_paths.front();
-
-    if (!target_path.empty()) {
-        for (auto* tab : open_tabs_) {
-            if (tab->filepath == target_path) {
-                tabs_->value(tab->group);
-                tab->editor->take_focus();
+    if (!target.empty()) {
+        for (size_t i = 0; i < open_tabs_.size(); ++i) {
+            if (open_tabs_[i]->filepath == target) {
+                tabs_->value(open_tabs_[i]->group);
+                open_tabs_[i]->editor->take_focus();
                 break;
             }
         }
-
-        size_t slash = target_path.find_last_of("/\\");
+        size_t slash = target.find_last_of("/\\");
         std::string dir;
-        if (slash == std::string::npos) {
-            dir = ".";
-        } else if (slash == 0) {
-            dir = target_path.substr(0, 1);
-        } else {
-            dir = target_path.substr(0, slash);
-        }
-
+        if (slash == std::string::npos) dir = ".";
+        else if (slash == 0) dir = target.substr(0, 1);
+        else dir = target.substr(0, slash);
         set_current_dir(dir);
     }
 
@@ -1103,99 +656,219 @@ void TextEditorApp::load_session() {
     redraw();
 }
 
+// ---------------------------------------------------------------------------
+// tabs
+// ---------------------------------------------------------------------------
+
 TabData* TextEditorApp::get_current_tab() {
-    Fl_Widget* current_tab = tabs_->value();
-    if (!current_tab) return nullptr;
-    for (auto tab : open_tabs_) {
-        if (tab->group == current_tab) return tab;
-    }
+    Fl_Widget* current = tabs_->value();
+    if (!current) return nullptr;
+    for (size_t i = 0; i < open_tabs_.size(); ++i)
+        if (open_tabs_[i]->group == current) return open_tabs_[i];
     return nullptr;
 }
 
-void TextEditorApp::new_file() {
-    std::string fname = "untitled";
-    int counter = 0;
-    std::string path = current_dir_;
-    if (!path.empty() && path[path.length() - 1] != '/' && path[path.length() - 1] != '\\') {
-        path += "/";
-    }
-    std::string candidate_name = fname;
-    std::string candidate_path = get_absolute_path(path + candidate_name);
+TabData* TextEditorApp::tab_for_editor(Fl_Text_Editor* editor) {
+    for (size_t i = 0; i < open_tabs_.size(); ++i)
+        if (open_tabs_[i]->editor == editor) return open_tabs_[i];
+    return nullptr;
+}
 
-    bool exists = true;
-    while (exists) {
-        exists = false;
-        for (auto tab : open_tabs_) {
-            if (tab->filepath == candidate_path) {
-                exists = true;
-                counter++;
-                candidate_name = "untitled_" + std::to_string(counter);
-                candidate_path = get_absolute_path(path + candidate_name);
-                break;
-            }
-        }
-    }
+void TextEditorApp::select_tab(size_t index) {
+    if (index >= open_tabs_.size()) return;
+    tabs_->value(open_tabs_[index]->group);
+    tabs_->set_changed();
+    tabs_->do_callback();
+}
 
+void TextEditorApp::configure_editor(TabData* tab) {
+    bool prose = (tab->language == "Markdown" || tab->language == "Plain Text");
+    tab->editor->wrap_mode(prose ? Fl_Text_Display::WRAP_AT_BOUNDS : Fl_Text_Display::WRAP_NONE, 0);
+}
+
+// Re-detect the language after the file name changed (rename / save as).
+void TextEditorApp::apply_language(TabData* tab) {
+    int len = std::min(tab->buffer->length(), 512);
+    tab->language = Highlighter::detect_language(tab->filepath, buffer_range(tab->buffer, 0, len));
+    configure_editor(tab);
+    restyle_tab(tab);
+}
+
+TabData* TextEditorApp::create_tab(const std::string& path, const std::string& name, const std::string& content,
+                                   bool untitled, bool crlf) {
     Fl_Color editor_bg = fl_rgb_color(30, 33, 39);
     Fl_Color editor_text = fl_rgb_color(220, 223, 228);
-    Fl_Color cursor_color = fl_rgb_color(97, 175, 239); 
+    Fl_Color cursor_color = fl_rgb_color(97, 175, 239);
     Fl_Color select_color = fl_rgb_color(50, 115, 195);
 
     tabs_->begin();
     Fl_Group* grp = new Fl_Group(240, 35, w() - 250, h() - 80);
+    grp->copy_label(name.c_str());
     grp->color(fl_rgb_color(40, 44, 52));
-    
+
     Fl_Text_Editor* editor = new Fl_Text_Editor(245, 40, w() - 260, h() - 90);
-    editor->linenumber_width(55);
-    
+    editor->linenumber_width(static_cast<int>(font_size_ * 3.3));
+    editor->linenumber_size(std::max(8, font_size_ - 3));
+    editor->linenumber_fgcolor(fl_rgb_color(92, 99, 112));
+    editor->linenumber_bgcolor(fl_rgb_color(33, 37, 43));
+
     Fl_Text_Buffer* textbuf = new Fl_Text_Buffer();
     Fl_Text_Buffer* stylebuf = new Fl_Text_Buffer();
 
     editor->buffer(textbuf);
-    textbuf->tab_distance(4);
+    textbuf->tab_distance(TAB_WIDTH);
 
     editor->color(editor_bg);
     editor->textcolor(editor_text);
     editor->textfont(FL_COURIER);
-    editor->textsize(17);                  
-    editor->cursor_color(cursor_color);    
+    editor->textsize(font_size_);
+    editor->cursor_color(cursor_color);
     editor->cursor_style(Fl_Text_Editor::NORMAL_CURSOR);
-    editor->show_cursor();                 
+    editor->show_cursor();
     editor->selection_color(select_color);
 
-    stylebuf->text(std::string(textbuf->length(), 'A').c_str());
-    TabData* tab_data = new TabData{grp, editor, textbuf, stylebuf, candidate_path, candidate_name, true, tabs_};
+    editor->add_key_binding(FL_Enter, FL_TEXT_EDITOR_ANY_STATE, kf_smart_enter);
+    editor->add_key_binding(FL_KP_Enter, FL_TEXT_EDITOR_ANY_STATE, kf_smart_enter);
+    editor->add_key_binding(FL_Tab, 0, kf_tab);
+    editor->add_key_binding(FL_Tab, FL_SHIFT, kf_shift_tab);
 
-    editor->highlight_data(stylebuf, style_table_, 7, 'A', 0, 0);
-    style_update_cb(0, textbuf->length(), 0, 0, 0, tab_data);
-    
-    textbuf->add_modify_callback(style_update_cb, tab_data);
-    textbuf->add_modify_callback(buffer_modified_cb, tab_data);
+    textbuf->text(content.c_str());
+    stylebuf->text(std::string(static_cast<size_t>(textbuf->length()), 'A').c_str());
+
+    TabData* tab = new TabData();
+    tab->group = grp;
+    tab->editor = editor;
+    tab->buffer = textbuf;
+    tab->style_buffer = stylebuf;
+    tab->filepath = path;
+    tab->filename = name;
+    tab->is_modified = untitled;
+    tab->is_untitled = untitled;
+    tab->crlf = crlf;
+    tab->tabs = tabs_;
+    tab->language = Highlighter::detect_language(path, content.substr(0, 512));
+
+    editor->highlight_data(stylebuf, style_table_, STYLE_COUNT, 'A', 0, 0);
+    configure_editor(tab);
+    restyle_tab(tab);
+
+    textbuf->add_modify_callback(style_update_cb, tab);
+    textbuf->add_modify_callback(buffer_modified_cb, tab);
 
     grp->end();
     tabs_->end();
 
-    open_tabs_.push_back(tab_data);
+    open_tabs_.push_back(tab);
     tabs_->value(grp);
-    editor->take_focus();
-    update_tab_label(tab_data);
+    update_tab_label(tab);
+    return tab;
+}
+
+void TextEditorApp::destroy_tab(TabData* tab) {
+    size_t idx = 0;
+    for (; idx < open_tabs_.size(); ++idx)
+        if (open_tabs_[idx] == tab) break;
+    if (idx == open_tabs_.size()) return;
+
+    Fl::remove_timeout(restyle_timeout_cb, tab);
+    tabs_->remove(tab->group);
+    delete tab->group;  // also destroys the editor; the buffers must outlive it
+    delete tab->buffer;
+    delete tab->style_buffer;
+    delete tab;
+    open_tabs_.erase(open_tabs_.begin() + idx);
+
+    if (!open_tabs_.empty()) {
+        size_t next = std::min(idx, open_tabs_.size() - 1);
+        tabs_->value(open_tabs_[next]->group);
+        open_tabs_[next]->editor->take_focus();
+    }
     update_status_bar();
     redraw();
 }
 
-void TextEditorApp::open_file(const std::string& path) {
-    open_file(path, true);
+bool TextEditorApp::close_tab(TabData* tab) {
+    if (!tab) return true;
+    if (tab->is_modified) {
+        tabs_->value(tab->group);
+        int choice = fl_choice("File %s has unsaved changes.", "Cancel", "Save", "Close Without Saving", tab->filename.c_str());
+        if (choice == 0) return false;
+        if (choice == 1 && !save_tab(tab)) return false;
+    }
+    destroy_tab(tab);
+    return true;
 }
+
+void TextEditorApp::close_current_tab() { close_tab(get_current_tab()); }
+
+struct CloseRequest {
+    TextEditorApp* app;
+    Fl_Widget* group;
+};
+
+// Middle-click arrives from inside Fl_Tabs::handle(); closing the tab there would
+// delete the widget being handled, so do it from the event loop instead.
+void TextEditorApp::schedule_close(Fl_Widget* group) {
+    CloseRequest* req = new CloseRequest();
+    req->app = this;
+    req->group = group;
+    Fl::add_timeout(0.0, deferred_close_cb, req);
+}
+
+void TextEditorApp::deferred_close_cb(void* data) {
+    CloseRequest* req = static_cast<CloseRequest*>(data);
+    for (size_t i = 0; i < req->app->open_tabs_.size(); ++i) {
+        if (req->app->open_tabs_[i]->group == req->group) {
+            req->app->close_tab(req->app->open_tabs_[i]);
+            break;
+        }
+    }
+    delete req;
+}
+
+void TextEditorApp::try_quit() {
+    for (size_t i = 0; i < open_tabs_.size(); ++i) {
+        TabData* tab = open_tabs_[i];
+        if (tab->is_modified) {
+            tabs_->value(tab->group);
+            int choice = fl_choice("File %s has unsaved changes. Save before exiting?", "Cancel", "Save", "Don't Save", tab->filename.c_str());
+            if (choice == 0) return;
+            if (choice == 1 && !save_tab(tab)) return;
+        }
+    }
+    hide();
+}
+
+// ---------------------------------------------------------------------------
+// open / save
+// ---------------------------------------------------------------------------
+
+void TextEditorApp::new_file() {
+    std::string name = "untitled";
+    int counter = 0;
+    for (;;) {
+        std::string candidate = get_absolute_path(join_path(current_dir_, name));
+        bool taken = false;
+        for (size_t i = 0; i < open_tabs_.size(); ++i)
+            if (open_tabs_[i]->filepath == candidate) { taken = true; break; }
+        if (!taken) break;
+        name = "untitled_" + std::to_string(++counter);
+    }
+    TabData* tab = create_tab(get_absolute_path(join_path(current_dir_, name)), name, "", true, false);
+    tab->editor->take_focus();
+    update_status_bar();
+    redraw();
+}
+
+void TextEditorApp::open_file(const std::string& path) { open_file(path, true); }
 
 void TextEditorApp::open_file(const std::string& path, bool focus_editor) {
     std::string abs_path = get_absolute_path(path);
 
-    for (auto tab : open_tabs_) {
-        if (tab->filepath == abs_path) {
-            tabs_->value(tab->group);
-            if (focus_editor) {
-                tab->editor->take_focus();
-            }
+    for (size_t i = 0; i < open_tabs_.size(); ++i) {
+        if (open_tabs_[i]->filepath == abs_path) {
+            tabs_->value(open_tabs_[i]->group);
+            if (focus_editor) open_tabs_[i]->editor->take_focus();
             update_status_bar();
             return;
         }
@@ -1209,94 +882,104 @@ void TextEditorApp::open_file(const std::string& path, bool focus_editor) {
     std::stringstream buffer_stream;
     buffer_stream << file.rdbuf();
     file.close();
+    std::string content = buffer_stream.str();
 
-    std::string file_content = buffer_stream.str();
-    file_content.erase(std::remove(file_content.begin(), file_content.end(), '\r'), file_content.end());
+    if (content.find('\0') != std::string::npos) {
+        fl_alert("This looks like a binary file, not text:\n%s", abs_path.c_str());
+        return;
+    }
+
+    bool crlf = content.find("\r\n") != std::string::npos;
+    content.erase(std::remove(content.begin(), content.end(), '\r'), content.end());
 
     size_t last_slash = abs_path.find_last_of("/\\");
     std::string fname = (last_slash == std::string::npos) ? abs_path : abs_path.substr(last_slash + 1);
 
-    Fl_Color editor_bg = fl_rgb_color(30, 33, 39);
-    Fl_Color editor_text = fl_rgb_color(220, 223, 228);
-    Fl_Color cursor_color = fl_rgb_color(97, 175, 239); 
-    Fl_Color select_color = fl_rgb_color(50, 115, 195);
-
-    tabs_->begin();
-    Fl_Group* grp = new Fl_Group(240, 35, w() - 250, h() - 80);
-    grp->copy_label(fname.c_str());
-    grp->color(fl_rgb_color(40, 44, 52));
-    
-    Fl_Text_Editor* editor = new Fl_Text_Editor(245, 40, w() - 260, h() - 90);
-    editor->linenumber_width(55);
-
-    Fl_Text_Buffer* textbuf = new Fl_Text_Buffer();
-    Fl_Text_Buffer* stylebuf = new Fl_Text_Buffer();
-
-    editor->buffer(textbuf);
-    textbuf->tab_distance(4);
-
-    editor->color(editor_bg);
-    editor->textcolor(editor_text);
-    editor->textfont(FL_COURIER);
-    editor->textsize(17);                  
-    editor->cursor_color(cursor_color);    
-    editor->cursor_style(Fl_Text_Editor::NORMAL_CURSOR);
-    editor->show_cursor();                 
-    editor->selection_color(select_color);
-
-    textbuf->text(file_content.c_str());
-
-    stylebuf->text(std::string(textbuf->length(), 'A').c_str());
-    TabData* tab_data = new TabData{grp, editor, textbuf, stylebuf, abs_path, fname, false, tabs_};
-
-    editor->highlight_data(stylebuf, style_table_, 7, 'A', 0, 0);
-    style_update_cb(0, textbuf->length(), 0, 0, 0, tab_data);
-    
-    textbuf->add_modify_callback(style_update_cb, tab_data);
-    textbuf->add_modify_callback(buffer_modified_cb, tab_data);
-
-    grp->end();
-    tabs_->end();
-
-    open_tabs_.push_back(tab_data);
-    tabs_->value(grp);
-    if (focus_editor) {
-        editor->take_focus();
-    }
-    update_tab_label(tab_data);
+    TabData* tab = create_tab(abs_path, fname, content, false, crlf);
+    if (focus_editor) tab->editor->take_focus();
     update_status_bar();
     redraw();
 }
 
-bool TextEditorApp::save_tab(TabData* tab) {
-    if (!tab) return true;
-    std::ofstream file(tab->filepath.c_str());
-    if (file.is_open()) {
-        char* text = tab->buffer->text();
-        std::string content = text ? text : "";
-        free(text);
+void TextEditorApp::open_file_dialog() {
+    Fl_Native_File_Chooser fc;
+    fc.title("Open File");
+    fc.type(Fl_Native_File_Chooser::BROWSE_MULTI_FILE);
+    fc.directory(current_dir_.c_str());
+    if (fc.show() != 0) return;
+    for (int i = 0; i < fc.count(); ++i) open_file(fc.filename(i));
+}
 
-        if (!content.empty() && content.back() != '\n') {
-            content += '\n';
-        }
+bool TextEditorApp::write_tab_to_disk(TabData* tab) {
+    std::string content = buffer_range(tab->buffer, 0, tab->buffer->length());
+    if (!content.empty() && content[content.size() - 1] != '\n') content += '\n';
 
-        file << content;
-        file.close();
-        if (!file) {
-            fl_alert("Error: Could not save file %s", tab->filepath.c_str());
-            return false;
+    if (tab->crlf) {
+        std::string converted;
+        converted.reserve(content.size() + content.size() / 16);
+        for (size_t i = 0; i < content.size(); ++i) {
+            if (content[i] == '\n') converted += '\r';
+            converted += content[i];
         }
-        tab->is_modified = false;
-        update_tab_label(tab);
-        
-        if (file_browser_) {
-            load_directory(current_dir_);
-        }
-        return true;
-    } else {
+        content.swap(converted);
+    }
+
+    std::ofstream file(tab->filepath.c_str(), std::ios::binary);
+    if (!file.is_open()) {
         fl_alert("Error: Could not save file %s", tab->filepath.c_str());
         return false;
     }
+    file << content;
+    file.close();
+    if (!file) {
+        fl_alert("Error: Could not save file %s", tab->filepath.c_str());
+        return false;
+    }
+    tab->is_modified = false;
+    update_tab_label(tab);
+    if (file_browser_) load_directory(current_dir_);
+    return true;
+}
+
+bool TextEditorApp::save_tab(TabData* tab) {
+    if (!tab) return true;
+    if (tab->is_untitled) return save_tab_as(tab);
+    return write_tab_to_disk(tab);
+}
+
+bool TextEditorApp::save_tab_as(TabData* tab) {
+    if (!tab) return true;
+    Fl_Native_File_Chooser fc;
+    fc.title("Save As");
+    fc.type(Fl_Native_File_Chooser::BROWSE_SAVE_FILE);
+    fc.options(Fl_Native_File_Chooser::SAVEAS_CONFIRM | Fl_Native_File_Chooser::NEW_FOLDER);
+    fc.directory(current_dir_.c_str());
+    fc.preset_file(tab->filename.c_str());
+    if (fc.show() != 0) return false;
+
+    std::string path = get_absolute_path(fc.filename());
+    for (size_t i = 0; i < open_tabs_.size(); ++i) {
+        if (open_tabs_[i] != tab && open_tabs_[i]->filepath == path) {
+            fl_alert("%s is already open in another tab.", path.c_str());
+            return false;
+        }
+    }
+
+    std::string old_path = tab->filepath;
+    bool old_untitled = tab->is_untitled;
+    tab->filepath = path;
+    size_t slash = path.find_last_of("/\\");
+    tab->filename = (slash == std::string::npos) ? path : path.substr(slash + 1);
+    tab->is_untitled = false;
+    if (!write_tab_to_disk(tab)) {
+        tab->filepath = old_path;
+        tab->is_untitled = old_untitled;
+        return false;
+    }
+    apply_language(tab);
+    if (slash != std::string::npos && slash > 0) set_current_dir(path.substr(0, slash));
+    update_status_bar();
+    return true;
 }
 
 void TextEditorApp::save_current_file() {
@@ -1304,58 +987,46 @@ void TextEditorApp::save_current_file() {
     if (tab) save_tab(tab);
 }
 
-void TextEditorApp::close_current_tab() {
-    Fl_Widget* current_tab = tabs_->value();
-    if (!current_tab) return;
-
-    for (auto it = open_tabs_.begin(); it != open_tabs_.end(); ++it) {
-        if ((*it)->group == current_tab) {
-            TabData* tab = *it;
-            if (tab->is_modified) {
-                int choice = fl_choice("File %s has unsaved changes.", "Cancel", "Save", "Close Without Saving", tab->filename.c_str());
-                if (choice == 0) return;
-                if (choice == 1 && !save_tab(tab)) return;
-            }
-
-            tabs_->remove(tab->group);
-            delete tab->group; 
-            delete tab->buffer;
-            delete tab->style_buffer;
-            delete tab;
-            open_tabs_.erase(it);
-            update_status_bar();
-            redraw();
-            break;
-        }
-    }
+void TextEditorApp::save_current_file_as() {
+    TabData* tab = get_current_tab();
+    if (tab) save_tab_as(tab);
 }
 
-void TextEditorApp::try_quit() {
-    for (auto tab : open_tabs_) {
-        if (tab->is_modified) {
-            tabs_->value(tab->group);
-            int choice = fl_choice("File %s has unsaved changes. Save before exiting?", "Cancel", "Save", "Don't Save", tab->filename.c_str());
-            if (choice == 0) return;
-            if (choice == 1 && !save_tab(tab)) return;
-        }
-    }
-    hide();
+// ---------------------------------------------------------------------------
+// find / replace
+// ---------------------------------------------------------------------------
+
+static std::string selected_single_line(TabData* tab) {
+    if (!tab) return std::string();
+    int s = 0, e = 0;
+    if (!tab->buffer->selection_position(&s, &e) || e <= s || e - s > 200) return std::string();
+    std::string text = buffer_range(tab->buffer, s, e);
+    return text.find('\n') == std::string::npos ? text : std::string();
 }
 
 void TextEditorApp::show_find_dialog() {
-    if (!find_dialog_) {
-        find_dialog_ = new FindReplaceDialog(this, false);
-    }
+    if (!find_dialog_) find_dialog_ = new FindReplaceDialog(this, false);
+    std::string sel = selected_single_line(get_current_tab());
+    if (!sel.empty()) find_dialog_->set_query(sel);
     find_dialog_->show();
-    find_dialog_->redraw();
+    find_dialog_->focus_query();
 }
 
 void TextEditorApp::show_replace_dialog() {
-    if (!replace_dialog_) {
-        replace_dialog_ = new FindReplaceDialog(this, true);
-    }
+    if (!replace_dialog_) replace_dialog_ = new FindReplaceDialog(this, true);
+    std::string sel = selected_single_line(get_current_tab());
+    if (!sel.empty()) replace_dialog_->set_query(sel);
     replace_dialog_->show();
-    replace_dialog_->redraw();
+    replace_dialog_->focus_query();
+}
+
+// F3 / Shift+F3: repeat the last search from the dialog's query
+void TextEditorApp::find_again(bool backwards) {
+    FindReplaceDialog* dlg = replace_dialog_ && replace_dialog_->visible() ? replace_dialog_ : find_dialog_;
+    if (!dlg) dlg = replace_dialog_;
+    if (!dlg) { show_find_dialog(); return; }
+    if (backwards) dlg->do_find_prev();
+    else dlg->do_find_next();
 }
 
 void TextEditorApp::find_text(const std::string& query, bool match_case) {
@@ -1367,15 +1038,18 @@ void TextEditorApp::find_text(const std::string& query, bool match_case) {
     int start_pos = editor->insert_position();
     int found_pos = 0;
     bool found = buf->search_forward(start_pos, query.c_str(), &found_pos, match_case ? 1 : 0);
+    bool wrapped = false;
     if (!found && start_pos > 0) {
         found = buf->search_forward(0, query.c_str(), &found_pos, match_case ? 1 : 0);
+        wrapped = found;
     }
     if (found) {
-        editor->insert_position(found_pos + query.length());
-        buf->select(found_pos, found_pos + query.length());
+        editor->insert_position(found_pos + static_cast<int>(query.length()));
+        buf->select(found_pos, found_pos + static_cast<int>(query.length()));
         editor->show_insert_position();
+        if (wrapped) set_status_message("Search wrapped to the top");
     } else {
-        fl_alert("Text not found.");
+        set_status_message("Not found: " + query);
     }
 }
 
@@ -1387,131 +1061,293 @@ void TextEditorApp::find_previous_text(const std::string& query, bool match_case
 
     int start_pos = editor->insert_position();
     int sel_s, sel_e;
-    if (buf->selection_position(&sel_s, &sel_e)) {
-        start_pos = sel_s;
-    }
-    if (start_pos > 0) start_pos--;
+    if (buf->selection_position(&sel_s, &sel_e)) start_pos = sel_s;
+    if (start_pos > 0) --start_pos;
 
     int found_pos = 0;
     bool found = buf->search_backward(start_pos, query.c_str(), &found_pos, match_case ? 1 : 0);
+    bool wrapped = false;
     if (!found) {
         found = buf->search_backward(buf->length(), query.c_str(), &found_pos, match_case ? 1 : 0);
+        wrapped = found;
     }
     if (found) {
         editor->insert_position(found_pos);
-        buf->select(found_pos, found_pos + query.length());
+        buf->select(found_pos, found_pos + static_cast<int>(query.length()));
         editor->show_insert_position();
+        if (wrapped) set_status_message("Search wrapped to the bottom");
     } else {
-        fl_alert("Text not found.");
+        set_status_message("Not found: " + query);
     }
+}
+
+static bool equals_nocase(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i)
+        if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
+    return true;
 }
 
 void TextEditorApp::replace_text(const std::string& query, const std::string& replacement, bool match_case) {
     TabData* tab = get_current_tab();
     if (!tab) return;
     Fl_Text_Buffer* buf = tab->buffer;
-    Fl_Text_Editor* editor = tab->editor;
 
     int sel_start = 0, sel_end = 0;
     if (buf->selection_position(&sel_start, &sel_end)) {
-        char* raw_selected = buf->text_range(sel_start, sel_end);
-        std::string selected_text = raw_selected ? raw_selected : "";
-        std::free(raw_selected);
-        bool matches = match_case ? (selected_text == query) : 
-            [](std::string a, std::string b) {
-                if (a.size() != b.size()) return false;
-                for(size_t i=0; i<a.size(); ++i) if(std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
-                return true;
-            }(selected_text, query);
+        std::string selected = buffer_range(buf, sel_start, sel_end);
+        bool matches = match_case ? (selected == query) : equals_nocase(selected, query);
         if (matches) {
             buf->replace(sel_start, sel_end, replacement.c_str());
-            editor->insert_position(sel_start + replacement.length());
+            tab->editor->insert_position(sel_start + static_cast<int>(replacement.length()));
         }
     }
     find_text(query, match_case);
 }
 
+// Done on a std::string and applied with a single buffer change. Replacing match
+// by match made every replacement a separate edit of a potentially huge buffer.
 void TextEditorApp::replace_all_text(const std::string& query, const std::string& replacement, bool match_case) {
     TabData* tab = get_current_tab();
-    if (!tab) return;
-    Fl_Text_Buffer* buf = tab->buffer;
+    if (!tab || query.empty()) return;
 
-    if (query.empty()) return;
-
-    int pos = 0;
-    int count = 0;
-    int found_pos = 0;
-    while (pos <= buf->length() &&
-           buf->search_forward(pos, query.c_str(), &found_pos, match_case ? 1 : 0)) {
-        buf->replace(found_pos, found_pos + static_cast<int>(query.length()), replacement.c_str());
-        pos = found_pos + static_cast<int>(replacement.length());
-        if (replacement.empty()) pos = found_pos;
-        ++count;
-        if (pos > buf->length()) break;
+    std::string text = buffer_range(tab->buffer, 0, tab->buffer->length());
+    std::string hay = text, needle = query;
+    if (!match_case) {
+        for (size_t i = 0; i < hay.size(); ++i) hay[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(hay[i])));
+        for (size_t i = 0; i < needle.size(); ++i) needle[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(needle[i])));
     }
-    fl_message("Replaced %d occurrence(s).", count);
+
+    std::string result;
+    size_t pos = 0, hit;
+    int count = 0;
+    while ((hit = hay.find(needle, pos)) != std::string::npos) {
+        result.append(text, pos, hit - pos);
+        result += replacement;
+        pos = hit + needle.size();
+        ++count;
+    }
+    if (count == 0) {
+        set_status_message("Not found: " + query);
+        return;
+    }
+    result.append(text, pos, std::string::npos);
+
+    int cursor = tab->editor->insert_position();
+    tab->buffer->text(result.c_str());
+    tab->editor->insert_position(std::min(cursor, tab->buffer->length()));
+    tab->editor->show_insert_position();
+    set_status_message("Replaced " + std::to_string(count) + " occurrence(s)");
 }
+
+// ---------------------------------------------------------------------------
+// editing commands
+// ---------------------------------------------------------------------------
+
+void TextEditorApp::goto_line() {
+    TabData* tab = get_current_tab();
+    if (!tab) return;
+    const char* answer = fl_input("Go to line:", "");
+    if (!answer) return;
+    int line = std::atoi(answer);
+    if (line < 1) return;
+    int pos = tab->buffer->skip_lines(0, line - 1);
+    tab->editor->insert_position(pos);
+    tab->editor->show_insert_position();
+    tab->editor->take_focus();
+    update_status_bar();
+}
+
+// Whole-line range covered by the selection (or by the caret's line).
+static void selection_lines(TabData* tab, int& line_a, int& line_b, bool& has_sel) {
+    Fl_Text_Buffer* buf = tab->buffer;
+    int s = 0, e = 0;
+    has_sel = buf->selection_position(&s, &e) != 0 && e > s;
+    if (!has_sel) s = e = tab->editor->insert_position();
+    else if (buf->byte_at(e - 1) == '\n') --e;  // a selection that ends at a line start doesn't include that line
+    line_a = buf->line_start(s);
+    line_b = buf->line_end(e);
+}
+
+void TextEditorApp::toggle_comment() {
+    TabData* tab = get_current_tab();
+    if (!tab) return;
+    int a, b;
+    bool has_sel;
+    selection_lines(tab, a, b, has_sel);
+
+    std::string block = buffer_range(tab->buffer, a, b), out;
+    if (!EditHelpers::toggle_line_comments(tab->language, block, out)) {
+        set_status_message("No line-comment syntax for " + tab->language);
+        return;
+    }
+    int cursor = tab->editor->insert_position();
+    tab->buffer->replace(a, b, out.c_str());
+    if (has_sel) {
+        tab->buffer->select(a, a + static_cast<int>(out.size()));
+        tab->editor->insert_position(a + static_cast<int>(out.size()));
+    } else {
+        int delta = static_cast<int>(out.size()) - static_cast<int>(block.size());
+        tab->editor->insert_position(std::max(a, cursor + delta));
+    }
+    tab->editor->show_insert_position();
+}
+
+void TextEditorApp::set_font_size(int size) {
+    size = std::max(9, std::min(40, size));
+    font_size_ = size;
+    for (int i = 0; i < STYLE_COUNT; ++i) style_table_[i].size = size;
+    for (size_t i = 0; i < open_tabs_.size(); ++i) {
+        TabData* tab = open_tabs_[i];
+        tab->editor->textsize(size);
+        tab->editor->linenumber_width(static_cast<int>(size * 3.3));
+        tab->editor->linenumber_size(std::max(8, size - 3));
+        tab->editor->highlight_data(tab->style_buffer, style_table_, STYLE_COUNT, 'A', 0, 0);
+        tab->editor->redraw();
+    }
+    set_status_message("Font size " + std::to_string(size));
+}
+
+// ---------------------------------------------------------------------------
+// editor key bindings
+// ---------------------------------------------------------------------------
+
+int TextEditorApp::kf_smart_enter(int, Fl_Text_Editor* e) {
+    Fl_Text_Buffer* buf = e->buffer();
+    int s = 0, en = 0;
+    if (buf->selection_position(&s, &en)) {
+        buf->remove_selection();
+        e->insert_position(s);
+    }
+    int pos = e->insert_position();
+    std::string before = buffer_range(buf, buf->line_start(pos), pos);
+    std::string after = buffer_range(buf, pos, buf->line_end(pos));
+
+    TextEditorApp* app = static_cast<TextEditorApp*>(e->top_window());
+    TabData* tab = app ? app->tab_for_editor(e) : nullptr;
+    EditHelpers::NewlineEdit ed = EditHelpers::smart_newline(tab ? tab->language : "Plain Text", before, after, TAB_WIDTH);
+
+    if (ed.delete_before > 0) {
+        buf->remove(pos - ed.delete_before, pos);
+        pos -= ed.delete_before;
+    }
+    if (!ed.text.empty()) {
+        buf->insert(pos, ed.text.c_str());
+        pos += static_cast<int>(ed.text.size());
+    }
+    e->insert_position(pos - ed.cursor_back);
+    e->show_insert_position();
+    return 1;
+}
+
+int TextEditorApp::kf_tab(int, Fl_Text_Editor* e) {
+    Fl_Text_Buffer* buf = e->buffer();
+    TextEditorApp* app = static_cast<TextEditorApp*>(e->top_window());
+    TabData* tab = app ? app->tab_for_editor(e) : nullptr;
+
+    int s = 0, en = 0;
+    if (tab && buf->selection_position(&s, &en) && buf->line_start(s) != buf->line_start(en > s ? en - 1 : en)) {
+        int a, b;
+        bool has_sel;
+        selection_lines(tab, a, b, has_sel);
+        std::string out = EditHelpers::indent_lines(buffer_range(buf, a, b), TAB_WIDTH);
+        buf->replace(a, b, out.c_str());
+        buf->select(a, a + static_cast<int>(out.size()));
+        e->insert_position(a + static_cast<int>(out.size()));
+        return 1;
+    }
+    if (buf->selection_position(&s, &en)) {
+        buf->remove_selection();
+        e->insert_position(s);
+    }
+    int pos = e->insert_position();
+    int col = buf->count_displayed_characters(buf->line_start(pos), pos);
+    int n = TAB_WIDTH - (col % TAB_WIDTH);
+    buf->insert(pos, std::string(static_cast<size_t>(n), ' ').c_str());
+    e->insert_position(pos + n);
+    e->show_insert_position();
+    return 1;
+}
+
+int TextEditorApp::kf_shift_tab(int, Fl_Text_Editor* e) {
+    Fl_Text_Buffer* buf = e->buffer();
+    TextEditorApp* app = static_cast<TextEditorApp*>(e->top_window());
+    TabData* tab = app ? app->tab_for_editor(e) : nullptr;
+    if (!tab) return 1;
+
+    int a, b;
+    bool has_sel;
+    selection_lines(tab, a, b, has_sel);
+    std::string block = buffer_range(buf, a, b);
+    std::string out = EditHelpers::outdent_lines(block, TAB_WIDTH);
+    if (out == block) return 1;
+    int cursor = e->insert_position();
+    buf->replace(a, b, out.c_str());
+    if (has_sel) {
+        buf->select(a, a + static_cast<int>(out.size()));
+        e->insert_position(a + static_cast<int>(out.size()));
+    } else {
+        int delta = static_cast<int>(out.size()) - static_cast<int>(block.size());
+        e->insert_position(std::max(a, cursor + delta));
+    }
+    e->show_insert_position();
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// window-level shortcuts
+// ---------------------------------------------------------------------------
 
 int TextEditorApp::handle(int event) {
     if (event == FL_KEYBOARD) {
-        update_status_bar();
-        
-        int key = Fl::event_key();
+        const int key = Fl::event_key();
+        const int state = Fl::event_state();
 
-        if (file_browser_ && file_browser_->value() > 0) {
-            if (key == (FL_F + 2)) {
-                rename_selected_file();
-                return 1;
-            }
-            if (key == FL_Delete) {
-                delete_selected_file();
-                return 1;
-            }
+        if (file_browser_ && file_browser_->value() > 0 && Fl::focus() == file_browser_) {
+            if (key == (FL_F + 2)) { rename_selected_file(); return 1; }
+            if (key == FL_Delete) { delete_selected_file(); return 1; }
         }
 
-        if (Fl::event_state() & FL_CTRL) {
-            if (key == 's' || key == 'S') {
-                save_current_file();
-                return 1;
-            } else if (key == 'w' || key == 'W') {
-                close_current_tab();
-                return 1;
-            } else if (key == 'q' || key == 'Q') {
-                try_quit();
-                return 1;
-            } else if (key == 'n' || key == 'N') {
-                new_file();
-                return 1;
-            } else if (key == 'f' || key == 'F') {
-                show_find_dialog();
-                return 1;
-            } else if (key == 'h' || key == 'H') {
-                show_replace_dialog();
-                return 1;
-            } else if (key == FL_Tab) {
-                if (!open_tabs_.empty()) {
-                    Fl_Widget* current_tab = tabs_->value();
-                    size_t current_idx = 0;
-                    for (size_t i = 0; i < open_tabs_.size(); ++i) {
-                        if (open_tabs_[i]->group == current_tab) {
-                            current_idx = i;
-                            break;
-                        }
+        if (key == (FL_F + 3)) {
+            find_again((state & FL_SHIFT) != 0);
+            return 1;
+        }
+
+        if (state & FL_CTRL) {
+            switch (key) {
+                case 's': case 'S':
+                    if (state & FL_SHIFT) save_current_file_as(); else save_current_file();
+                    return 1;
+                case 'o': case 'O': open_file_dialog(); return 1;
+                case 'w': case 'W': close_current_tab(); return 1;
+                case 'q': case 'Q': try_quit(); return 1;
+                case 'n': case 'N': new_file(); return 1;
+                case 'f': case 'F': show_find_dialog(); return 1;
+                case 'h': case 'H': show_replace_dialog(); return 1;
+                case 'g': case 'G': goto_line(); return 1;
+                case '/': toggle_comment(); return 1;
+                case '=': case '+': case FL_KP + '+': set_font_size(font_size_ + 1); return 1;
+                case '-': case FL_KP + '-': set_font_size(font_size_ - 1); return 1;
+                case '0': case FL_KP + '0': set_font_size(DEFAULT_FONT_SIZE); return 1;
+                case FL_Tab:
+                    if (!open_tabs_.empty()) {
+                        size_t cur = 0;
+                        Fl_Widget* current = tabs_->value();
+                        for (size_t i = 0; i < open_tabs_.size(); ++i)
+                            if (open_tabs_[i]->group == current) { cur = i; break; }
+                        size_t next = (state & FL_SHIFT) ? (cur == 0 ? open_tabs_.size() - 1 : cur - 1)
+                                                         : (cur + 1) % open_tabs_.size();
+                        select_tab(next);
                     }
-                    size_t next_idx;
-                    if (Fl::event_state() & FL_SHIFT) {
-                        next_idx = (current_idx == 0) ? open_tabs_.size() - 1 : current_idx - 1;
-                    } else {
-                        next_idx = (current_idx + 1) % open_tabs_.size();
-                    }
-                    tabs_->value(open_tabs_[next_idx]->group);
-                    tabs_->set_changed();
-                    tabs_->do_callback();
-                    update_status_bar();
-                }
-                return 1;
+                    return 1;
+                default: break;
             }
         }
     }
-    return Fl_Double_Window::handle(event);
+
+    int ret = Fl_Double_Window::handle(event);
+    // Update after the child widgets processed the event; before it the status bar
+    // would always lag one keystroke behind and never follow mouse clicks.
+    if (event == FL_KEYBOARD || event == FL_RELEASE || event == FL_DRAG) update_status_bar();
+    return ret;
 }

@@ -1,49 +1,40 @@
 # Flitpad 📝
 
-**Flitpad** is a lightweight, fast, and feature-rich text editor designed for developers and power users. Built from scratch in C++ using the FLTK (Fast Light Toolkit) library, it provides a clean, distraction-free coding environment with a modern dark theme inspired by Atom's One Dark.
+**Flitpad** is a lightweight, fast text editor for developers, written in C++ with FLTK. It has a clean, distraction-free dark theme inspired by Atom's One Dark.
 
 ---
 
 ## ✨ Features
 
-* **Multi-Tab Interface:** Easily open and manage multiple files simultaneously with dedicated tabs.
-* **Syntax Highlighting:** Real-time syntax coloring for C, C++, Python, JavaScript, HTML/XML, CSS, JSON, Markdown, and more.
-* **File Browser Sidebar:** Navigate your project directory, open files, create new files, rename, or delete files directly from the sidebar.
-* **Auto-Refresh Sidebar:** The sidebar automatically updates when files are saved or modified.
-* **Quick Delete & Rename:** Select a file in the sidebar and press `Delete` to remove it from disk (with confirmation prompt), or press `F2` to rename.
-* **Session Restoration:** Automatically remembers your open tabs and window size/position when you restart the app.
-* **Find & Replace:** Full-featured search, replace, and replace-all capabilities with case-sensitivity options.
-* **Status Bar:** Real-time line/column cursor tracking, character encoding, and active file path indicators.
-* **Custom App Icon & Theme:** Custom embedded 32x32 application icon and a polished dark color scheme.
+* **Multi-tab editing** – open several files at once; middle-click a tab to close it.
+* **Syntax highlighting** for C, C++, C#, Java, JavaScript, TypeScript, Go, Rust, Python, Nim, PHP, SQL, Shell, Makefile, CMake, HTML/XML/SVG (with embedded `<script>`/`<style>`), CSS/SCSS, JSON, YAML, TOML, INI, diff and **Markdown**.
+* **Markdown highlighting** – headings (ATX and setext), **bold**, *italic*, ~~strikethrough~~, `inline code`, fenced code blocks highlighted in their own language (` ```cpp `), links, images, bare URLs, lists and task lists, block quotes, tables, horizontal rules, HTML comments and YAML front matter. Markdown and plain-text files soft-wrap.
+* **Smart editing** – auto-indent, extra indent after `{ ( [` (and `:` in Python/YAML), `{|}` splits into an indented block, Tab/Shift+Tab indent and outdent whole selections, Markdown lists/quotes continue on Enter (Enter on an empty item ends the list), comment toggle for every language that has line comments.
+* **File browser sidebar** – open, create, rename (`F2`) and delete (`Delete`) files; `../` navigates up. Keys only act on the sidebar while it has focus.
+* **Find & Replace** – Enter = find next, `F3` / `Shift+F3` repeat the search, the dialog is pre-filled from your selection, Replace All is a single fast edit.
+* **Safe file handling** – CRLF files stay CRLF, binary files are refused, new files ask for a name on first save, unsaved-changes prompts on close/quit.
+* **Session restoration** – tabs, active file and window geometry come back after a restart.
+* **Status bar** – line/column, selection size, line ending, language and path; follows the cursor on every key and click.
+* **Single instance** – opening a file from a file manager hands it to the running window and raises it.
+* **Zoom** – `Ctrl +` / `Ctrl -` / `Ctrl 0`.
 
 ---
 
-## 🛠️ Requirements & Dependencies
+## 🛠️ Requirements
 
-To compile and run Flitpad, you need:
-* A C++ compiler supporting C++11 (`g++`, `clang++`)
-* FLTK 1.3+ development libraries
+* A C++11 compiler (`g++`, `clang++`)
+* FLTK 1.3+ development libraries (`fltk-config` in `PATH`)
 * Cairo / X11 development headers (Linux)
 
----
+## 🚀 Building
 
-## 🚀 Building from Source
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/simargl/flitpad.git
-   cd flitpad
-   ```
-
-2. Compile using the provided Makefile:
-   ```bash
-   make
-   ```
-
-3. Run the application:
-   ```bash
-   ./flitpad
-   ```
+```bash
+git clone https://github.com/simargl/flitpad.git
+cd flitpad
+make            # build ./flitpad
+make test       # unit tests for the highlighter and editing logic (no FLTK needed)
+sudo make install
+```
 
 ---
 
@@ -51,18 +42,34 @@ To compile and run Flitpad, you need:
 
 | Shortcut | Action |
 | :--- | :--- |
-| **Ctrl + N** | Open new file |
-| **Ctrl + S** | Save current file |
-| **Ctrl + W** | Close current tab |
-| **Ctrl + Q** | Quit application |
-| **Ctrl + F** | Show Find dialog |
-| **Ctrl + H** | Show Replace dialog |
-| **Ctrl + Tab** | Switch to next tab |
-| **Ctrl + Shift + Tab** | Switch to previous tab |
+| **Ctrl + N** | New file |
+| **Ctrl + O** | Open file(s) |
+| **Ctrl + S** | Save (asks for a name for new files) |
+| **Ctrl + Shift + S** | Save As |
+| **Ctrl + W** / middle-click tab | Close tab |
+| **Ctrl + Q** | Quit |
+| **Ctrl + F** / **Ctrl + H** | Find / Replace |
+| **F3** / **Shift + F3** | Find next / previous |
+| **Ctrl + G** | Go to line |
+| **Ctrl + /** | Toggle line comment |
+| **Tab** / **Shift + Tab** | Indent / outdent (selection aware) |
+| **Ctrl + Tab** / **Ctrl + Shift + Tab** | Next / previous tab |
+| **Ctrl + =** / **Ctrl + -** / **Ctrl + 0** | Zoom in / out / reset |
 | **F2** *(sidebar)* | Rename selected file |
-| **Delete** *(sidebar)* | Delete selected file from disk |
+| **Delete** *(sidebar)* | Delete selected file |
 
 ---
+
+## 🧱 Source layout
+
+| File | Purpose |
+| :--- | :--- |
+| `TextEditorApp.*` | Main window, tabs, sidebar, file I/O, key handling |
+| `Highlighter.*` | Language detection and syntax highlighting (toolkit independent) |
+| `EditHelpers.*` | Auto-indent, list continuation, comment toggle (toolkit independent) |
+| `FindReplaceDialog.*` | Find / Replace window |
+| `CustomTabs.h`, `TabData.h` | Tab widget and per-tab state |
+| `tests/` | `make test`; `tests/show_styles` prints highlighter output for a file |
 
 ## 📄 License
 

@@ -4,6 +4,7 @@
 #include <string>
 #include <algorithm>
 #include <cstdlib>
+#include <cerrno>
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -17,7 +18,8 @@
 bool is_process_running(int pid) {
     if (pid <= 0) return false;
 #ifndef _WIN32
-    return (kill(pid, 0) == 0);
+    // EPERM: the process exists but belongs to another user
+    return (kill(pid, 0) == 0) || errno == EPERM;
 #else
     HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid);
     if (process) {
@@ -89,12 +91,10 @@ int main(int argc, char** argv) {
 
     window.show(argc, argv);
 
-    bool opened_any = false;
     for (int i = 1; i < argc; ++i) {
         if (argv[i][0] != '-') {
             std::string path = argv[i];
             window.open_file(path);
-            opened_any = true;
 
             if (i == 1) {
                 std::string abs_path = path;
@@ -115,6 +115,8 @@ int main(int argc, char** argv) {
             }
         }
     }
+
+    if (window.open_tabs_.empty()) window.new_file();   // never start with an empty gray window
 
     return Fl::run();
 }

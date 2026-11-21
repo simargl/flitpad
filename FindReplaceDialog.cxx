@@ -16,6 +16,8 @@ FindReplaceDialog::FindReplaceDialog(TextEditorApp* app, bool replace_mode)
     find_input_->labelfont(FL_HELVETICA);
     find_input_->labelsize(13);
     find_input_->labelcolor(fl_rgb_color(171, 178, 191));
+    find_input_->when(FL_WHEN_ENTER_KEY_ALWAYS);   // Enter = Find Next
+    find_input_->callback(find_enter_cb, this);
     y += 38;
 
     if (is_replace_mode_) {
@@ -25,6 +27,8 @@ FindReplaceDialog::FindReplaceDialog(TextEditorApp* app, bool replace_mode)
         replace_input_->labelfont(FL_HELVETICA);
         replace_input_->labelsize(13);
         replace_input_->labelcolor(fl_rgb_color(171, 178, 191));
+        replace_input_->when(FL_WHEN_ENTER_KEY_ALWAYS);   // Enter = Replace
+        replace_input_->callback(replace_enter_cb, this);
         y += 38;
     } else {
         replace_input_ = nullptr;
@@ -115,6 +119,23 @@ void FindReplaceDialog::replace_all_cb(Fl_Widget*, void* data) {
 void FindReplaceDialog::close_cb(Fl_Widget*, void* data) {
     FindReplaceDialog* dlg = static_cast<FindReplaceDialog*>(data);
     dlg->hide();
+}
+
+void FindReplaceDialog::find_enter_cb(Fl_Widget*, void* data) {
+    static_cast<FindReplaceDialog*>(data)->do_find_next();
+}
+
+void FindReplaceDialog::replace_enter_cb(Fl_Widget*, void* data) {
+    static_cast<FindReplaceDialog*>(data)->do_replace();
+}
+
+void FindReplaceDialog::set_query(const std::string& query) {
+    find_input_->value(query.c_str());
+    find_input_->position(static_cast<int>(query.size()), 0);  // cursor at end, mark at start = all selected
+}
+
+void FindReplaceDialog::focus_query() {
+    find_input_->take_focus();
 }
 
 void FindReplaceDialog::do_find_next() {
