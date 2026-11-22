@@ -1,5 +1,6 @@
 #include "FindReplaceDialog.h"
 #include "TextEditorApp.h"
+#include "Theme.h"
 #include <FL/fl_draw.H>
 #include <cstring>
 
@@ -7,26 +8,26 @@ FindReplaceDialog::FindReplaceDialog(TextEditorApp* app, bool replace_mode)
     : Fl_Double_Window(540, replace_mode ? 190 : 140, replace_mode ? "Find and Replace" : "Find"),
       app_(app), is_replace_mode_(replace_mode) {
     
-    color(fl_rgb_color(40, 44, 52));
+    color(Theme::window_bg());
 
     int y = 20;
     find_input_ = new Fl_Input(90, y, 435, 28, "Find:");
-    find_input_->color(fl_rgb_color(33, 37, 43));
-    find_input_->textcolor(fl_rgb_color(220, 223, 228));
+    find_input_->color(Theme::panel_bg());
+    find_input_->textcolor(Theme::text_strong());
     find_input_->labelfont(FL_HELVETICA);
     find_input_->labelsize(13);
-    find_input_->labelcolor(fl_rgb_color(171, 178, 191));
+    find_input_->labelcolor(Theme::text());
     find_input_->when(FL_WHEN_ENTER_KEY_ALWAYS);   // Enter = Find Next
     find_input_->callback(find_enter_cb, this);
     y += 38;
 
     if (is_replace_mode_) {
         replace_input_ = new Fl_Input(90, y, 435, 28, "Replace:");
-        replace_input_->color(fl_rgb_color(33, 37, 43));
-        replace_input_->textcolor(fl_rgb_color(220, 223, 228));
+        replace_input_->color(Theme::panel_bg());
+        replace_input_->textcolor(Theme::text_strong());
         replace_input_->labelfont(FL_HELVETICA);
         replace_input_->labelsize(13);
-        replace_input_->labelcolor(fl_rgb_color(171, 178, 191));
+        replace_input_->labelcolor(Theme::text());
         replace_input_->when(FL_WHEN_ENTER_KEY_ALWAYS);   // Enter = Replace
         replace_input_->callback(replace_enter_cb, this);
         y += 38;
@@ -36,11 +37,11 @@ FindReplaceDialog::FindReplaceDialog(TextEditorApp* app, bool replace_mode)
 
     match_case_check_ = new Fl_Check_Button(90, y, 150, 25, "Match case");
     match_case_check_->labelsize(13);
-    match_case_check_->labelcolor(fl_rgb_color(171, 178, 191));
+    match_case_check_->labelcolor(Theme::text());
     y += 42;
 
-    Fl_Color btn_bg = fl_rgb_color(58, 63, 75);
-    Fl_Color btn_txt = fl_rgb_color(220, 223, 228);
+    Fl_Color btn_bg = Theme::button_bg();
+    Fl_Color btn_txt = Theme::text_strong();
 
     if (is_replace_mode_) {
         int w1 = 85, w2 = 85, w3 = 75, w4 = 85, w5 = 65;

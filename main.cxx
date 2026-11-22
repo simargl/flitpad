@@ -14,6 +14,7 @@
 #endif
 
 #include "TextEditorApp.h"
+#include "Theme.h"
 
 bool is_process_running(int pid) {
     if (pid <= 0) return false;
@@ -80,10 +81,7 @@ int main(int argc, char** argv) {
         lock_out.close();
     }
 
-    Fl::scheme("gtk+");
-    Fl::background(40, 44, 52);
-    Fl::background2(33, 37, 43);
-    Fl::foreground(171, 178, 191);
+    Theme::apply();
 
     TextEditorApp window(1200, 800, "FlitPad");
 

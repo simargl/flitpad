@@ -81,13 +81,19 @@ struct LangDef {
     bool decorators = false;   // @name
     bool func_calls = true;    // ident( -> function colour
     bool camel_types = false;  // CapitalizedName -> type colour
-    bool caps_const = true;    // ALL_CAPS -> constant colour
+    bool caps_const = false;   // ALL_CAPS -> constant colour (off: solarized-dark does not do this)
     bool bang_macros = false;  // rust name!(
     bool ident_dash = false;   // foo-bar is one word (shell, make, cmake)
     bool hash_needs_space = true;  // '#' starts a comment only after whitespace
     bool makefile = false;
+    bool operators = false;    // + - * / = < > ! & | ^ ~ ? in the operator colour
     int dollar = 0;            // 1 shell/cmake, 2 make, 3 php
-    WordSet kw, ty, def_intro;
+    WordSet kw;           // statements (orange)
+    WordSet ty;           // builtin type names (yellow)
+    WordSet bi;           // builtin functions / objects (blue)
+    WordSet consts;       // true false null None ... (cyan, like numbers)
+    WordSet def_intro;    // keywords after which a function name follows
+    WordSet type_intro;   // keywords after which a type name follows
 };
 
 size_t scan_shell_var(const std::string& t, size_t i) {
@@ -171,11 +177,11 @@ std::string highlight_generic(const LangDef& d, const std::string& t) {
     std::string st(n, PLAIN);
     size_t i = 0, line_begin = 0;
     bool line_start = true;
-    bool expect_def = false;
+    int expect = 0;   // 1: next identifier names a function, 2: names a type
 
     while (i < n) {
         char c = t[i];
-        if (c == '\n') { line_start = true; line_begin = i + 1; expect_def = false; ++i; continue; }
+        if (c == '\n') { line_start = true; line_begin = i + 1; expect = 0; ++i; continue; }
         if (c == ' ' || c == '\t' || c == '\r') { ++i; continue; }
         const bool at_line_start = line_start;
         line_start = false;
@@ -186,7 +192,7 @@ std::string highlight_generic(const LangDef& d, const std::string& t) {
             if (resume > i) { i = resume; continue; }
         }
 
-        if (!is_ident_start(c)) expect_def = false;
+        if (!is_ident_start(c)) expect = 0;
 
         // block comment
         if (!d.block_open.empty() && match_at(t, i, d.block_open.c_str())) {
@@ -219,7 +225,7 @@ std::string highlight_generic(const LangDef& d, const std::string& t) {
             while (j < n && is_blank(t[j])) ++j;
             size_t k = j;
             while (k < n && is_ident_char(t[k])) ++k;
-            paint(st, i, k, KEYWORD);
+            paint(st, i, k, PREPROC);
             std::string dir = t.substr(j, k - j);
             i = k;
             if (dir == "include" || dir == "import") {
@@ -278,6 +284,10 @@ std::string highlight_generic(const LangDef& d, const std::string& t) {
             }
             if (j > n) j = n;
             paint(st, i, j, STRING);
+            if (!raw) {
+                for (size_t k = i + 1; k + 1 < j; ++k)
+                    if (t[k] == '\\') { paint(st, k, k + 2, SPECIAL); ++k; }
+            }
             if (d.dollar == 1 && c == '"') {
                 for (size_t k = i + 1; k < j; ++k) {
                     if (t[k] == '\\') { ++k; continue; }
@@ -308,7 +318,7 @@ std::string highlight_generic(const LangDef& d, const std::string& t) {
         if (c == '@' && d.decorators && i + 1 < n && is_ident_start(t[i + 1])) {
             size_t j = i + 1;
             while (j < n && (is_ident_char(t[j]) || t[j] == '.')) ++j;
-            paint(st, i, j, VARIABLE);
+            paint(st, i, j, PREPROC);
             i = j;
             continue;
         }
@@ -354,11 +364,17 @@ std::string highlight_generic(const LangDef& d, const std::string& t) {
             char style = PLAIN;
             if (d.kw.count(key)) {
                 style = KEYWORD;
-                if (d.def_intro.count(key)) expect_def = true;
-            } else if (expect_def) {
-                style = TYPE;
-                expect_def = false;
+                if (d.def_intro.count(key)) expect = 1;
+                else if (d.type_intro.count(key)) expect = 2;
+            } else if (d.consts.count(key)) {
+                style = NUMBER;
+                expect = 0;
+            } else if (expect) {
+                style = (expect == 1) ? static_cast<char>(TYPE) : TYPENAME;
+                expect = 0;
             } else if (d.ty.count(key)) {
+                style = TYPENAME;
+            } else if (d.bi.count(key)) {
                 style = TYPE;
             } else {
                 size_t k = j;
@@ -371,7 +387,7 @@ std::string highlight_generic(const LangDef& d, const std::string& t) {
                         style = TYPE;
                     } else if (d.camel_types && std::isupper(static_cast<unsigned char>(w[0])) &&
                                std::any_of(w.begin(), w.end(), [](char ch) { return std::islower(static_cast<unsigned char>(ch)) != 0; })) {
-                        style = TYPE;
+                        style = TYPENAME;
                     } else if (d.caps_const && w.size() >= 2 &&
                                std::all_of(w.begin(), w.end(), [](char ch) { return std::isupper(static_cast<unsigned char>(ch)) || is_digit(ch) || ch == '_'; }) &&
                                std::isupper(static_cast<unsigned char>(w[0]))) {
@@ -384,6 +400,7 @@ std::string highlight_generic(const LangDef& d, const std::string& t) {
             continue;
         }
 
+        if (d.operators && std::strchr("+-*/%=<>!&|^~?", c)) paint(st, i, i + 1, SPECIAL);
         ++i;
     }
     return st;
@@ -394,12 +411,12 @@ std::string highlight_generic(const LangDef& d, const std::string& t) {
 // ---------------------------------------------------------------------------
 
 const char* C_KW = "auto break case const continue default do else enum extern for goto if inline register "
-                   "restrict return sizeof static struct switch typedef union volatile while NULL true false";
+                   "restrict return sizeof static struct switch typedef union volatile while";
 const char* C_TY = "int char short long float double void unsigned signed bool size_t ssize_t ptrdiff_t intptr_t "
                    "uintptr_t int8_t int16_t int32_t int64_t uint8_t uint16_t uint32_t uint64_t FILE wchar_t va_list";
 const char* CPP_KW = " alignas alignof and and_eq asm bitand bitor catch class co_await co_return co_yield compl "
                      "concept const_cast consteval constexpr constinit decltype delete dynamic_cast explicit export "
-                     "final friend mutable namespace new noexcept not not_eq nullptr operator or or_eq override "
+                     "final friend mutable namespace new noexcept not not_eq operator or or_eq override "
                      "private protected public reinterpret_cast requires static_assert static_cast template this "
                      "thread_local throw try typeid typename using virtual xor xor_eq";
 const char* CPP_TY = " char8_t char16_t char32_t string wstring string_view vector unordered_map unordered_set "
@@ -410,9 +427,11 @@ LangDef c_like(bool cpp) {
     d.line_comments.push_back("//");
     d.block_open = "/*"; d.block_close = "*/";
     d.preproc = true;
+    d.operators = true;
     d.kw = words((std::string(C_KW) + (cpp ? CPP_KW : "")).c_str());
     d.ty = words((std::string(C_TY) + (cpp ? CPP_TY : "")).c_str());
-    d.def_intro = words(cpp ? "class struct enum namespace union" : "struct enum union");
+    d.consts = words(cpp ? "NULL true false nullptr" : "NULL true false");
+    d.type_intro = words(cpp ? "class struct enum namespace union" : "struct enum union");
     return d;
 }
 
@@ -421,19 +440,22 @@ LangDef js_like(bool ts) {
     d.line_comments.push_back("//");
     d.block_open = "/*"; d.block_close = "*/";
     d.bt = true;
+    d.operators = true;
     d.camel_types = true;
     d.kw = words("async await break case catch class const continue debugger default delete do else export extends "
                  "finally for function if import in instanceof let new of return static super switch this throw try "
-                 "typeof var void while with yield null undefined true false NaN Infinity");
-    d.ty = words("console window document require module exports process");
-    d.def_intro = words("function class");
+                 "typeof var void while with yield");
+    d.consts = words("null undefined true false NaN Infinity");
+    d.bi = words("console window document require module exports process");
+    d.def_intro = words("function");
+    d.type_intro = words("class");
     if (ts) {
         for (const char* w : {"interface", "type", "enum", "namespace", "declare", "abstract", "implements", "private",
                               "protected", "public", "readonly", "as", "is", "keyof", "infer", "satisfies"})
             d.kw.insert(w);
         for (const char* w : {"string", "number", "boolean", "object", "symbol", "bigint", "unknown", "never", "any"})
             d.ty.insert(w);
-        d.def_intro.insert("interface"); d.def_intro.insert("type"); d.def_intro.insert("enum");
+        d.type_intro.insert("interface"); d.type_intro.insert("type"); d.type_intro.insert("enum");
         d.decorators = true;
     }
     return d;
@@ -450,93 +472,115 @@ std::unordered_map<std::string, LangDef> build_defs() {
 
     {   LangDef d;  // Java
         d.line_comments.push_back("//"); d.block_open = "/*"; d.block_close = "*/";
+        d.operators = true;
         d.camel_types = true; d.decorators = true;
         d.kw = words("abstract assert break case catch class const continue default do else enum extends final finally "
                      "for goto if implements import instanceof interface native new package private protected public "
                      "return static strictfp super switch synchronized this throw throws transient try volatile while "
-                     "var record sealed permits yield null true false");
+                     "var record sealed permits yield");
+        d.consts = words("null true false");
         d.ty = words("int long short byte float double boolean char void");
-        d.def_intro = words("class interface enum record");
+        d.type_intro = words("class interface enum record");
         m["Java"] = d; }
 
     {   LangDef d;  // C#
         d.line_comments.push_back("//"); d.block_open = "/*"; d.block_close = "*/";
+        d.operators = true;
         d.camel_types = true; d.preproc = true;
         d.kw = words("abstract as base break case catch checked class const continue default delegate do else enum "
                      "event explicit extern finally fixed for foreach goto if implicit in interface internal is lock "
                      "namespace new operator out override params private protected public readonly ref return sealed "
                      "sizeof stackalloc static struct switch this throw try typeof unchecked unsafe using virtual "
-                     "volatile while var async await yield record init null true false");
+                     "volatile while var async await yield record init");
+        d.consts = words("null true false");
         d.ty = words("bool byte char decimal double float int long object sbyte short string uint ulong ushort void dynamic");
-        d.def_intro = words("class struct interface enum namespace record");
+        d.type_intro = words("class struct interface enum namespace record");
         m["C#"] = d; }
 
     {   LangDef d;  // Go
         d.line_comments.push_back("//"); d.block_open = "/*"; d.block_close = "*/";
+        d.operators = true;
         d.bt = true; d.camel_types = false;
         d.kw = words("break case chan const continue default defer else fallthrough for func go goto if import "
-                     "interface map package range return select struct switch type var nil true false iota");
+                     "interface map package range return select struct switch type var");
+        d.consts = words("nil true false iota");
         d.ty = words("bool byte complex64 complex128 error float32 float64 int int8 int16 int32 int64 rune string "
                      "uint uint8 uint16 uint32 uint64 uintptr any");
-        d.def_intro = words("func type");
+        d.def_intro = words("func");
+        d.type_intro = words("type");
         m["Go"] = d; }
 
     {   LangDef d;  // Rust
         d.line_comments.push_back("//"); d.block_open = "/*"; d.block_close = "*/";
+        d.operators = true;
         d.rust_char = true; d.bang_macros = true; d.camel_types = true; d.decorators = false;
-        d.kw = words("as async await break const continue crate dyn else enum extern false fn for if impl in let loop "
-                     "match mod move mut pub ref return self Self static struct super trait true type unsafe use "
+        d.kw = words("as async await break const continue crate dyn else enum extern fn for if impl in let loop "
+                     "match mod move mut pub ref return self Self static struct super trait type unsafe use "
                      "where while");
+        d.consts = words("true false");
         d.ty = words("bool char f32 f64 i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize str");
-        d.def_intro = words("fn struct enum trait mod type union");
+        d.def_intro = words("fn");
+        d.type_intro = words("struct enum trait mod type union");
         m["Rust"] = d; }
 
     {   LangDef d;  // Python
         d.line_comments.push_back("#");
+        d.operators = true;
         d.triple = true; d.decorators = true; d.camel_types = true;
         d.kw = words("and as assert async await break class continue def del elif else except finally for from global "
-                     "if import in is lambda nonlocal not or pass raise return try while with yield True False None");
-        d.ty = words("print len range open isinstance enumerate zip map filter sorted sum min max abs super property "
-                     "staticmethod classmethod int str float bool list dict set tuple bytes object type");
-        d.def_intro = words("def class");
+                     "if import in is lambda nonlocal not or pass raise return try while with yield");
+        d.consts = words("True False None");
+        d.ty = words("int str float bool list dict set tuple bytes object type");
+        d.bi = words("print len range open isinstance enumerate zip map filter sorted sum min max abs super property "
+                     "staticmethod classmethod");
+        d.def_intro = words("def");
+        d.type_intro = words("class");
         m["Python"] = d; }
 
     {   LangDef d;  // Nim
         d.line_comments.push_back("#");
         d.block_open = "#["; d.block_close = "]#";
+        d.operators = true;
         d.hash_needs_space = false; d.camel_types = true;
         d.kw = words("addr and as asm bind block break case cast concept const continue converter defer discard "
                      "distinct div do elif else end enum except export finally for from func if import in include "
-                     "interface is isnot iterator let macro method mixin mod nil not notin object of or out proc ptr "
-                     "raise ref return shl shr static template try tuple type using var when while xor yield true false");
+                     "interface is isnot iterator let macro method mixin mod not notin object of or out proc ptr "
+                     "raise ref return shl shr static template try tuple type using var when while xor yield");
+        d.consts = words("nil true false");
         d.ty = words("int int8 int16 int32 int64 uint uint8 uint16 uint32 uint64 float float32 float64 bool char "
                      "string cstring seq array set openArray pointer byte");
-        d.def_intro = words("proc func method iterator template macro converter type");
+        d.def_intro = words("proc func method iterator template macro converter");
+        d.type_intro = words("type");
         m["Nim"] = d; }
 
     {   LangDef d;  // PHP
         d.line_comments.push_back("//"); d.line_comments.push_back("#");
         d.block_open = "/*"; d.block_close = "*/";
+        d.operators = true;
         d.hash_needs_space = false; d.dollar = 3; d.camel_types = true;
         d.kw = words("abstract and array as break callable case catch class clone const continue declare default do "
                      "echo else elseif empty enddeclare endfor endforeach endif endswitch endwhile eval exit extends "
                      "final finally fn for foreach function global goto if implements include include_once "
                      "instanceof insteadof interface isset list match namespace new or print private protected "
                      "public readonly require require_once return static switch throw trait try unset use var while "
-                     "xor yield null true false");
+                     "xor yield");
+        d.consts = words("null true false");
         d.ty = words("int float string bool void mixed self parent iterable object");
-        d.def_intro = words("function class interface trait");
+        d.def_intro = words("function");
+        d.type_intro = words("class interface trait");
         m["PHP"] = d; }
 
     {   LangDef d;  // SQL
         d.line_comments.push_back("--");
         d.block_open = "/*"; d.block_close = "*/";
+        d.operators = true;
         d.nocase = true; d.bt = true; d.caps_const = false;
         d.kw = words("select from where insert into values update set delete create alter drop table index view "
-                     "database schema join inner outer left right full cross on as and or not null is in exists "
+                     "database schema join inner outer left right full cross on as and or not is in exists "
                      "between like limit offset order by group having distinct union all case when then else end "
                      "primary key foreign references default unique check constraint begin commit rollback "
                      "transaction asc desc with returning if using cascade grant revoke");
+        d.consts = words("null true false");
         d.ty = words("int integer bigint smallint tinyint decimal numeric float double real varchar char text date "
                      "time timestamp datetime boolean bool blob json uuid serial");
         m["SQL"] = d; }
@@ -545,8 +589,8 @@ std::unordered_map<std::string, LangDef> build_defs() {
         d.line_comments.push_back("#");
         d.dollar = 1; d.sq_raw = true; d.ident_dash = true; d.caps_const = false;
         d.kw = words("if fi then else elif for in do done while until case esac function return exit local declare "
-                     "export readonly source set unset shift eval exec");
-        d.ty = words("echo cd pwd mkdir rm cp mv chmod chown grep sed awk cat ls test read printf touch find xargs "
+                     "export readonly source set unset shift eval exec "
+                     "echo cd pwd mkdir rm cp mv chmod chown grep sed awk cat ls test read printf touch find xargs "
                      "sort uniq head tail curl wget tar make sudo git");
         m["Shell Script"] = d; }
 
@@ -595,7 +639,11 @@ std::string highlight_json(const std::string& t) {
             if (j < n && t[j] == '"') ++j;
             size_t k = j;
             while (k < n && is_space(t[k])) ++k;
-            paint(st, i, j, (k < n && t[k] == ':') ? TYPE : STRING);
+            const bool is_key = (k < n && t[k] == ':');
+            paint(st, i, j, is_key ? TYPE : STRING);
+            if (!is_key)
+                for (size_t e = i + 1; e + 1 < j; ++e)
+                    if (t[e] == '\\') { paint(st, e, e + 2, SPECIAL); ++e; }
             i = j;
         } else if (c == '/' && i + 1 < n && t[i + 1] == '/') {
             size_t e = line_end(t, i);
@@ -615,7 +663,7 @@ std::string highlight_json(const std::string& t) {
             size_t j = i + 1;
             while (j < n && std::isalnum(static_cast<unsigned char>(t[j]))) ++j;
             std::string w = t.substr(i, j - i);
-            if (w == "true" || w == "false" || w == "null") paint(st, i, j, KEYWORD);
+            if (w == "true" || w == "false" || w == "null") paint(st, i, j, NUMBER);
             i = j;
         } else {
             ++i;
@@ -939,7 +987,7 @@ void config_value(const std::string& t, size_t b, size_t e, std::string& st, int
             paint(st, i, j, NUMBER);
         } else if (lw == "true" || lw == "false" || (mode != CFG_TOML && (lw == "null" || lw == "~" || lw == "yes" || lw == "no" || lw == "on" || lw == "off")) ||
                    (mode == CFG_TOML && (lw == "inf" || lw == "nan"))) {
-            paint(st, i, j, KEYWORD);
+            paint(st, i, j, NUMBER);
         }
         i = j;
         at_value_start = false;
@@ -1125,17 +1173,21 @@ size_t md_link(std::string& st, const std::string& t, size_t i, size_t e, char t
             else if (t[j] == ')') { if (--pd == 0) { pe = j; break; } }
         }
         if (pe == std::string::npos) return 0;
-        paint(st, i, i + 1, MARKUP);
+        paint(st, i, i + 1, text_style);
         md_inline(st, t, i + 1, close, text_style);
-        paint(st, close, pe + 1, MARKUP);
+        paint(st, close, close + 2, text_style);   // ](
+        paint(st, close + 2, pe, URL);
+        paint(st, pe, pe + 1, text_style);         // )
         return pe + 1;
     }
     if (close + 1 < e && t[close + 1] == '[') {
         size_t r = t.find(']', close + 2);
         if (r == std::string::npos || r >= e) return 0;
-        paint(st, i, i + 1, MARKUP);
+        paint(st, i, i + 1, text_style);
         md_inline(st, t, i + 1, close, text_style);
-        paint(st, close, r + 1, MARKUP);
+        paint(st, close, close + 2, text_style);   // ][
+        paint(st, close + 2, r, URL);
+        paint(st, r, r + 1, text_style);           // ]
         return r + 1;
     }
     return 0;
@@ -1182,7 +1234,13 @@ void md_inline(std::string& st, const std::string& t, size_t b, size_t e, char b
                     std::string inner = t.substr(i + 1, k - i - 1);
                     bool url = inner.find("://") != std::string::npos ||
                                (inner.find('@') != std::string::npos && inner.find(' ') == std::string::npos);
-                    paint(st, i, k + 1, url ? MARKUP : KEYWORD);
+                    if (url) {
+                        paint(st, i, i + 1, MARKUP);
+                        paint(st, i + 1, k, URL);
+                        paint(st, k, k + 1, MARKUP);
+                    } else {
+                        paint(st, i, k + 1, KEYWORD);
+                    }
                     i = k + 1;
                     continue;
                 }
@@ -1193,7 +1251,7 @@ void md_inline(std::string& st, const std::string& t, size_t b, size_t e, char b
 
         if (c == '!' && i + 1 < e && t[i + 1] == '[') {
             size_t end = md_link(st, t, i + 1, e, VARIABLE);
-            if (end) { paint(st, i, i + 1, MARKUP); i = end; continue; }
+            if (end) { paint(st, i, i + 1, VARIABLE); i = end; continue; }
             ++i;
             continue;
         }
@@ -1208,7 +1266,7 @@ void md_inline(std::string& st, const std::string& t, size_t b, size_t e, char b
             size_t j = i;
             while (j < e && !is_space(t[j]) && t[j] != '<' && t[j] != '>') ++j;
             while (j > i && std::strchr(".,;:!?)'\"*_", t[j - 1])) --j;
-            paint(st, i, j, MARKUP);
+            paint(st, i, j, URL);
             i = (j > i) ? j : i + 1;
             continue;
         }
@@ -1296,6 +1354,10 @@ void md_fill_code(std::string& st, const std::string& t, size_t b, size_t e, con
         if (sub.size() == e - b) { st.replace(b, e - b, sub); return; }
     }
     paint(st, b, e, CODE);
+}
+
+inline char heading_style(int level) {
+    return level <= 1 ? static_cast<char>(HEADING) : static_cast<char>(HEADING2 + (level - 2));
 }
 
 std::string highlight_markdown(const std::string& t) {
@@ -1415,8 +1477,9 @@ std::string highlight_markdown(const std::string& t) {
                 size_t k = end;
                 while (k > q && t[k - 1] == '#') --k;
                 if (k < end && k > q && is_blank(t[k - 1])) end = k;  // closing ###
-                md_inline(st, t, p, e, HEADING);
-                paint(st, p, q, HEADING);
+                const char hs = heading_style(static_cast<int>(q - p));
+                md_inline(st, t, p, e, hs);
+                paint(st, p, q, hs);
                 prev_para = -1;
                 in_table = false;
                 continue;
@@ -1429,8 +1492,9 @@ std::string highlight_markdown(const std::string& t) {
             size_t q = p;
             while (q < e && t[q] == ch) ++q;
             if (t.find_first_not_of(" \t\r", q) >= e) {
-                md_inline(st, t, lines[prev_para].first, lines[prev_para].second, HEADING);
-                paint(st, p, e, HEADING);
+                const char hs = (ch == '=') ? static_cast<char>(HEADING) : static_cast<char>(HEADING2);
+                md_inline(st, t, lines[prev_para].first, lines[prev_para].second, hs);
+                paint(st, p, e, hs);
                 prev_para = -1;
                 continue;
             }
@@ -1460,7 +1524,7 @@ std::string highlight_markdown(const std::string& t) {
                 if (t[q] == '>') paint(st, q, q + 1, MARKUP);
                 ++q;
             }
-            md_inline(st, t, q, e, COMMENT);
+            md_inline(st, t, q, e, QUOTE);
             prev_para = -1;
             in_table = false;
             continue;
@@ -1507,7 +1571,7 @@ std::string highlight_markdown(const std::string& t) {
                 while (r < e && is_blank(t[r])) ++r;
                 if (r + 2 < e + 0 && t[r] == '[' && (t[r + 1] == ' ' || t[r + 1] == 'x' || t[r + 1] == 'X') && t[r + 2] == ']' &&
                     (r + 3 == e || is_blank(t[r + 3]))) {
-                    paint(st, r, r + 3, MARKUP);
+                    paint(st, r, r + 3, t[r + 1] == ' ' ? static_cast<char>(MARKUP) : static_cast<char>(SPECIAL));   // [x] is green
                     r += 3;
                 }
                 md_inline(st, t, r, e, PLAIN);
@@ -1520,8 +1584,9 @@ std::string highlight_markdown(const std::string& t) {
         if (p < e && t[p] == '[') {
             size_t close = t.find("]:", p);
             if (close != std::string::npos && close < e) {
-                paint(st, p, close + 2, LINK);
-                paint(st, close + 2, e, MARKUP);
+                paint(st, p, close + 1, LINK);
+                paint(st, close + 1, close + 2, MARKUP);
+                paint(st, close + 2, e, URL);
                 prev_para = -1;
                 continue;
             }
@@ -1561,10 +1626,37 @@ std::string highlight_text_lang(const std::string& lang, const std::string& text
 // public API
 // ---------------------------------------------------------------------------
 
+namespace {
+
+inline bool utf8_cont(char c) { return (static_cast<unsigned char>(c) & 0xC0) == 0x80; }
+
+// U+E000..U+F8FF (EE xx xx, EF 80..A3 xx) and U+F0000..U+FFFFF (F3 B0..BF xx xx).
+void mark_icons(const std::string& t, std::string& st) {
+    const size_t n = t.size();
+    for (size_t i = 0; i < n;) {
+        const unsigned char c = static_cast<unsigned char>(t[i]);
+        size_t len = 0;
+        if (c < 0x80) { ++i; continue; }
+        if ((c == 0xEE || c == 0xEF) && i + 2 < n && utf8_cont(t[i + 1]) && utf8_cont(t[i + 2]) &&
+            (c == 0xEE || static_cast<unsigned char>(t[i + 1]) <= 0xA3))
+            len = 3;
+        else if (c == 0xF3 && i + 3 < n && static_cast<unsigned char>(t[i + 1]) >= 0xB0 && utf8_cont(t[i + 1]) &&
+                 utf8_cont(t[i + 2]) && utf8_cont(t[i + 3]))
+            len = 4;
+        if (len == 0) { ++i; continue; }
+        for (size_t k = 0; k < len; ++k)
+            if (st[i + k] >= 'A' && st[i + k] < 'A' + STYLE_COUNT) st[i + k] = static_cast<char>(st[i + k] + ICON_STYLE_OFFSET);
+        i += len;
+    }
+}
+
+}  // namespace
+
 std::string highlight(const std::string& language, const std::string& text) {
     if (text.size() > MAX_HIGHLIGHT_BYTES) return std::string(text.size(), PLAIN);
     std::string st = highlight_text_lang(language, text);
     if (st.size() != text.size()) st.resize(text.size(), PLAIN);
+    mark_icons(text, st);
     return st;
 }
 

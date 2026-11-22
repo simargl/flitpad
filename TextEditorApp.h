@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "CustomTabs.h"
+#include "Settings.h"
 
 class TextEditorApp;
 class FindReplaceDialog;
@@ -30,7 +31,7 @@ public:
 
 class TextEditorApp : public Fl_Double_Window {
 public:
-    enum { STYLE_COUNT = 13 };  // must equal Highlighter::STYLE_COUNT
+    enum { STYLE_COUNT = 44 };  // must equal Highlighter::TOTAL_STYLE_COUNT: 22 styles + 22 icon twins
 
     CustomFileBrowser* file_browser_;
     Fl_Tabs* tabs_;
@@ -41,6 +42,10 @@ public:
 
     FindReplaceDialog* find_dialog_;
     FindReplaceDialog* replace_dialog_;
+
+    Settings settings_;              // ~/.flitpad_config: font_size, icon_font
+    std::string icon_font_name_;     // optional user override (icon_font=...)
+    bool icon_font_resolved_;        // icon font lookup done (it runs on first use)
 
     static Fl_Text_Editor::Style_Table_Entry style_table_[STYLE_COUNT];
 
@@ -77,6 +82,7 @@ public:
     void goto_line();
     void toggle_comment();
     void set_font_size(int size);
+    void resolve_icon_font();
 
     // find / replace
     void show_find_dialog();

@@ -49,7 +49,7 @@ static void test_markdown() {
     // apostrophes must not open strings
     CHECK(style_of(L, "Don't panic, it's fine\n", "panic, it") == 'A');
     CHECK(style_of(L, "# Title\n", "Title") == HEADING);
-    CHECK(style_of(L, "###### Six\n", "######") == HEADING);
+    CHECK(style_of(L, "###### Six\n", "######") == HEADING6);
     CHECK(style_of(L, "#hashtag\n", "#hashtag") == 'A');                   // not a heading
     CHECK(style_of(L, "####### seven\n", "seven") == 'A');
     CHECK(style_of(L, "a **bold** b\n", "bold") == BOLD);
@@ -60,23 +60,37 @@ static void test_markdown() {
     CHECK(style_of(L, "a `code *not em*` b\n", "code *not em*") == CODE);
     CHECK(style_of(L, "a ~~gone~~ b\n", "gone") == COMMENT);
     CHECK(style_of(L, "[text](http://x.y/a_(b))\n", "text") == LINK);
-    CHECK(style_of(L, "[text](http://x.y/a_(b))\n", "http://x.y/a_(b)") == MARKUP);
+    CHECK(style_of(L, "[text](http://x.y/a_(b))\n", "http://x.y/a_(b)") == URL);
+    CHECK(style_of(L, "[text](http://x.y/a_(b))\n", "[") == LINK);
     CHECK(style_of(L, "![alt](i.png)\n", "alt") == VARIABLE);
-    CHECK(style_of(L, "see https://example.com/x, ok\n", "https://example.com/x") == MARKUP);
-    CHECK(style_of(L, "> quote\n", "quote") == COMMENT);
+    CHECK(style_of(L, "see https://example.com/x, ok\n", "https://example.com/x") == URL);
+    CHECK(style_of(L, "<https://a.b/c>\n", "https://a.b/c") == URL);
+    CHECK(style_of(L, "> quote\n", "quote") == QUOTE);
     CHECK(style_of(L, "- item\n", "-") == MARKUP);
     CHECK(style_of(L, "1. item\n", "1.") == MARKUP);
-    CHECK(style_of(L, "- [x] done\n", "[x]") == MARKUP);
+    CHECK(style_of(L, "- [x] done\n", "[x]") == SPECIAL);
+    CHECK(style_of(L, "- [ ] todo\n", "[ ]") == MARKUP);
     CHECK(style_of(L, "---\n", "---") == MARKUP);                          // hr (no front matter: single line)
     CHECK(style_of(L, "Title\n=====\n", "Title") == HEADING);              // setext
     CHECK(style_of(L, "| a | b |\n|---|---|\n| c | d |\n", "|---|---|") == MARKUP);
     CHECK(style_of(L, "<!-- c -->\n", "c") == COMMENT);
     CHECK(style_of(L, "x\n<!-- a\nb -->\ny\n", "b") == COMMENT);           // multi-line comment
     CHECK(style_of(L, "[id]: http://x\n", "id") == LINK);
+    CHECK(style_of(L, "[id]: http://x\n", "http://x") == URL);
+    // one colour per heading level
+    CHECK(style_of(L, "# a\n", "a") == HEADING);
+    CHECK(style_of(L, "## a\n", "a") == HEADING2);
+    CHECK(style_of(L, "### a\n", "a") == HEADING3);
+    CHECK(style_of(L, "#### a\n", "a") == HEADING4);
+    CHECK(style_of(L, "##### a\n", "a") == HEADING5);
+    CHECK(style_of(L, "###### a\n", "a") == HEADING6);
+    CHECK(style_of(L, "Sub\n---\n", "Sub") == HEADING2);       // setext level 2
+    CHECK(style_of(L, "## a *em* b\n", "em") == ITALIC);        // inline styles still win inside headings
 
     // fenced blocks: language-aware, unterminated, and not leaking out
-    CHECK(style_of(L, "```cpp\nint x = 1;\n```\n", "int") == TYPE);
+    CHECK(style_of(L, "```cpp\nint x = 1;\n```\n", "int") == TYPENAME);
     CHECK(style_of(L, "```cpp\nint x = 1;\n```\n", "1") == NUMBER);
+    CHECK(style_of(L, "```cpp\nreturn x;\n```\n", "return") == KEYWORD);
     CHECK(style_of(L, "```\nDon't *x*\n```\n", "Don't *x*") == CODE);
     CHECK(style_of(L, "```py\nx = 1\n```\n*em*\n", "em") == ITALIC);
     CHECK(style_of(L, "```\nunterminated *x*\n", "unterminated") == CODE);
@@ -98,7 +112,7 @@ static void test_code_languages() {
     CHECK(style_of("SQL", "select 1 -- c", "-- c") == COMMENT);
     CHECK(style_of("C++", "int a; /* c\nd */ int b;", "d") == COMMENT);
     CHECK(style_of("C++", "int a; /* c\nd */ int b;", "b") == 'A');
-    CHECK(style_of("C++", "#include <vector>\n", "#include") == KEYWORD);
+    CHECK(style_of("C++", "#include <vector>\n", "#include") == PREPROC);
     CHECK(style_of("C++", "#include <vector>\n", "<vector>") == STRING);
     CHECK(style_of("C++", "foo(1);", "foo") == TYPE);
     CHECK(style_of("C++", "if (x) {}", "if") == KEYWORD);
@@ -108,7 +122,7 @@ static void test_code_languages() {
     CHECK(style_of("Python", "s = \"\"\"a\nb\"\"\"\nx = 1", "b") == STRING);
     CHECK(style_of("Python", "x = 1 # it's", "# it's") == COMMENT);
     CHECK(style_of("Python", "def foo(): pass", "foo") == TYPE);
-    CHECK(style_of("Python", "@dec\ndef f(): pass", "@dec") == VARIABLE);
+    CHECK(style_of("Python", "@dec\ndef f(): pass", "@dec") == PREPROC);
     CHECK(style_of("Rust", "fn f<'a>(x: &'a str) {}", "'a", 0) == 'A');   // lifetime, not a char
     CHECK(style_of("Rust", "let c = 'x';", "'x'") == STRING);
     CHECK(style_of("Rust", "println!(\"hi\");", "println!") == TYPE);
@@ -123,7 +137,7 @@ static void test_code_languages() {
     CHECK(style_of("CMake", "IF(X)\nENDIF()\n", "IF") == KEYWORD);          // case-insensitive
     CHECK(style_of("JSON", "{\"k\": \"v\", \"n\": 1}", "\"k\"") == TYPE);
     CHECK(style_of("JSON", "{\"k\": \"v\", \"n\": 1}", "\"v\"") == STRING);
-    CHECK(style_of("JSON", "{\"k\": true}", "true") == KEYWORD);
+    CHECK(style_of("JSON", "{\"k\": true}", "true") == NUMBER);
     CHECK(style_of("CSS", "@media (a: 1px) { .x:hover { color: #fff; } }", ".x") == TYPE);
     CHECK(style_of("CSS", "@media (a: 1px) { .x:hover { color: #fff; } }", "color") == TYPE);
     CHECK(style_of("CSS", "@media (a: 1px) { .x:hover { color: #fff; } }", "#fff") == NUMBER);
@@ -140,6 +154,74 @@ static void test_code_languages() {
     CHECK(style_of("TOML", "[tool.x]\nk = 1\n", "[tool.x]") == KEYWORD);
     CHECK(style_of("TOML", "[tool.x]\nk = 1\n", "1") == NUMBER);
     CHECK(style_of("Plain Text", "if (x) // y", "if") == 'A');
+
+    // operators are green in the languages where that reads well, plain elsewhere
+    CHECK(style_of("C++", "a = b + c;", "=") == SPECIAL);
+    CHECK(style_of("C++", "a = b + c;", "+") == SPECIAL);
+    CHECK(style_of("C++", "p->x", "->") == SPECIAL);
+    CHECK(style_of("Python", "x = 1", "=") == SPECIAL);
+    CHECK(style_of("JavaScript", "a => b", "=>") == SPECIAL);
+    CHECK(style_of("C++", "a = b + c;", "b") == 'A');
+    CHECK(style_of("Shell Script", "a=b", "=") == 'A');
+    CHECK(style_of("Makefile", "A = b\n", "=") == 'A');
+    CHECK(style_of("C++", "a /* c */ + b", "/* c */") == COMMENT);     // comments still win
+    CHECK(style_of("C++", "x = 1.5e3;", "1.5e3") == NUMBER);
+
+    // solarized-dark roles: statement orange, constant cyan, type yellow, identifier blue
+    CHECK(style_of("C++", "int x;", "int") == TYPENAME);
+    CHECK(style_of("C++", "return x;", "return") == KEYWORD);
+    CHECK(style_of("C++", "x = NULL;", "NULL") == NUMBER);
+    CHECK(style_of("C++", "x = true;", "true") == NUMBER);
+    CHECK(style_of("C++", "class Foo : public Bar {};", "Foo") == TYPENAME);
+    CHECK(style_of("C++", "class Foo : public Bar {};", "public") == KEYWORD);
+    CHECK(style_of("C++", "struct stat st;", "stat") == TYPENAME);
+    CHECK(style_of("C++", "x = FOO_BAR;", "FOO_BAR") == 'A');                // no ALL_CAPS guessing
+    CHECK(style_of("C++", "x = \"a\\nb\";", "\\n") == SPECIAL);          // escapes are green
+    CHECK(style_of("C++", "x = \"a\\nb\";", "a") == STRING);
+    CHECK(style_of("Python", "x = None", "None") == NUMBER);
+    CHECK(style_of("Python", "class Foo: pass", "Foo") == TYPENAME);
+    CHECK(style_of("Python", "print(x)", "print") == TYPE);                   // builtin function: blue
+    CHECK(style_of("Python", "x: int = 1", "int") == TYPENAME);
+    CHECK(style_of("JavaScript", "class A extends B {}", "A") == TYPENAME);
+    CHECK(style_of("JavaScript", "function go() {}", "go") == TYPE);
+    CHECK(style_of("JavaScript", "x = undefined;", "undefined") == NUMBER);
+    CHECK(style_of("Rust", "struct Point;", "Point") == TYPENAME);
+    CHECK(style_of("Rust", "fn main() {}", "main") == TYPE);
+    CHECK(style_of("Go", "func main() {}", "main") == TYPE);
+    CHECK(style_of("Go", "type Foo struct{}", "Foo") == TYPENAME);
+    CHECK(style_of("SQL", "SELECT NULL", "NULL") == NUMBER);
+    CHECK(style_of("SQL", "SELECT NULL", "SELECT") == KEYWORD);
+    CHECK(style_of("Shell Script", "echo hi", "echo") == KEYWORD);
+    CHECK(style_of("JSON", "{\"a\": \"x\\ty\"}", "\\t") == SPECIAL);
+}
+
+static char twin(char c) { return static_cast<char>(c + ICON_STYLE_OFFSET); }
+
+static void test_icons() {
+    const std::string fa = "\xef\x80\x95";             // U+F015 (FontAwesome "home")
+    const std::string nf = "\xf3\xb0\x80\x81";        // U+F0001 (Nerd Fonts, supplementary private use)
+    const char P = twin(PLAIN);
+    std::string st = highlight("Plain Text", "a" + fa + "b");
+    CHECK(st == std::string("A") + std::string(3, P) + "A");         // plain -> its icon twin
+    st = highlight("Plain Text", nf + "x");
+    CHECK(st == std::string(4, P) + "A");
+    st = highlight("C++", "// " + fa + "\nint x;");
+    CHECK(st.substr(3, 3) == std::string(3, twin(COMMENT)));         // comment colour is kept
+    CHECK(st[0] == COMMENT && st[2] == COMMENT);
+    st = highlight("Markdown", "# T " + fa + "\n");
+    CHECK(st.substr(4, 3) == std::string(3, twin(HEADING)));
+    st = highlight("Python", "s = \"" + fa + "\"");
+    CHECK(st.substr(5, 3) == std::string(3, twin(STRING)) && st[4] == STRING);
+    // not private use: U+E000-F8FF only; EF A4 80 is U+F900 (CJK compatibility)
+    CHECK(highlight("Plain Text", "\xef\xa4\x80") == "AAA");
+    CHECK(highlight("Plain Text", "\xef\xa3\xbf") == std::string(3, P));   // U+F8FF is the last private-use char
+    CHECK(highlight("Plain Text", "\xee\x80\x80") == std::string(3, P));   // U+E000 is the first
+    CHECK(highlight("Plain Text", "\xe4\xb8\xad") == "AAA");        // ordinary CJK untouched
+    CHECK(highlight("Plain Text", "caf\xc3\xa9") == "AAAAA");        // so is accented text
+    CHECK(highlight("Plain Text", "\xef\x80") == "AA");              // truncated sequence: no overrun
+    CHECK(highlight("Plain Text", "\xf3\xb0\x80") == "AAA");
+    CHECK(highlight("Plain Text", "\xf3\xa0\x80\x80") == "AAAA");  // F3 A0 = U+E0000 tags, not private use
+    CHECK(ICON_STYLE_OFFSET == STYLE_COUNT && TOTAL_STYLE_COUNT == 2 * STYLE_COUNT);
 }
 
 static void test_robustness() {
@@ -149,7 +231,7 @@ static void test_robustness() {
     // fixed nasty inputs
     const char* nasty[] = {"", "\n", "`", "```", "```\n", "[", "[](", "![", "**", "*", "_", "<", "<!--", "<a", "<a href=\"",
                            "\"", "'", "\"\"\"", "/*", "$(", "${", "$", "#[[", "|", "|-|\n|", "---\n", "---\na: b", "> >", "1)",
-                           "- [ ", "{", "}", "@", "@media", "\xff\xfe", "a\\", "\\", "<script>", "<style>", "a: |\n"};
+                           "- [ ", "\xef\x80", "\xef", "\xf3\xb0\x80", "\xee\x80\x80\xef", "{", "}", "@", "@media", "\xff\xfe", "a\\", "\\", "<script>", "<style>", "a: |\n"};
     for (size_t l = 0; l < sizeof(langs) / sizeof(*langs); ++l)
         for (size_t k = 0; k < sizeof(nasty) / sizeof(*nasty); ++k) {
             std::string t = nasty[k];
@@ -170,7 +252,7 @@ static void test_robustness() {
             CHECK(st.size() == t.size());
             bool ok = true;
             for (size_t i = 0; i < st.size(); ++i)
-                if (st[i] < 'A' || st[i] >= 'A' + STYLE_COUNT) ok = false;
+                if (st[i] < 'A' || st[i] >= 'A' + TOTAL_STYLE_COUNT) ok = false;
             CHECK(ok);
         }
     }
@@ -240,6 +322,7 @@ int main() {
     test_detection();
     test_markdown();
     test_code_languages();
+    test_icons();
     test_robustness();
     test_edit_helpers();
     std::cout << (checks - failures) << "/" << checks << " checks passed\n";

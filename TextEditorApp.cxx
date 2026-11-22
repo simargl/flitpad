@@ -4,6 +4,8 @@
 #include "Highlighter.h"
 #include "EditHelpers.h"
 #include "PathUtil.h"
+#include "Theme.h"
+#include "IconFont.h"
 #include <FL/filename.H>
 #include <FL/fl_ask.H>
 #include <FL/Fl_RGB_Image.H>
@@ -16,9 +18,11 @@
 #include <algorithm>
 #include <vector>
 
-static_assert(TextEditorApp::STYLE_COUNT == Highlighter::STYLE_COUNT, "style table size mismatch");
+static_assert(TextEditorApp::STYLE_COUNT == Highlighter::TOTAL_STYLE_COUNT, "style table size mismatch");
 
 static const int DEFAULT_FONT_SIZE = 17;
+static const int MIN_FONT_SIZE = 9;
+static const int MAX_FONT_SIZE = 40;
 static const int TAB_WIDTH = 4;
 
 // 16x16 XPM Icon for Folders (Gold/Yellow)
@@ -95,22 +99,38 @@ int CustomFileBrowser::handle(int event) {
     return Fl_Browser::handle(event);
 }
 
-// One Dark inspired palette. Letters match Highlighter::Style.
+// GtkSourceView "solarized-dark" palette. Letters match Highlighter::Style.
+// Theme::syntax() lifts colours that FLTK would otherwise draw white (see
+// ColorMath.h). Entries 22..43 are the "icon twins" of 0..21 (same colour, drawn
+// with the icon font); the constructor fills them in and resolve_icon_font()
+// gives them the real font.
+#define SYN(c) Theme::syntax(Theme::c)
 Fl_Text_Editor::Style_Table_Entry TextEditorApp::style_table_[TextEditorApp::STYLE_COUNT] = {
-    { fl_rgb_color(220, 223, 228), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // A plain
-    { fl_rgb_color(198, 120, 221), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // B keywords
-    { fl_rgb_color(157, 165, 180), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // C comments, quotes, ~~strike~~
-    { fl_rgb_color(152, 195, 121), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // D strings
-    { fl_rgb_color(209, 154, 102), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // E numbers, constants
-    { fl_rgb_color( 97, 175, 239), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // F functions, types, keys
-    { fl_rgb_color(229, 192, 123), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // G variables, attributes
-    { fl_rgb_color(224, 108, 117), FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // H markdown headings
-    { fl_rgb_color(209, 154, 102), FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // I markdown bold
-    { fl_rgb_color(198, 120, 221), FL_COURIER_ITALIC, DEFAULT_FONT_SIZE, 0 }, // J markdown italic
-    { fl_rgb_color(152, 195, 121), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // K markdown code
-    { fl_rgb_color( 97, 175, 239), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // L markdown link text
-    { fl_rgb_color( 86, 182, 194), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }  // M markdown markers, urls
+    { SYN(BASE1),   FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // A plain text
+    { SYN(ORANGE),  FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // B keywords (def:statement)
+    { Theme::rgb(ColorMath::lifted(Theme::BASE01, Theme::BASE03, 108)),
+                    FL_COURIER_ITALIC, DEFAULT_FONT_SIZE, 0 }, // C comments, ~~strike~~ (base01, italic)
+    { SYN(CYAN),    FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // D strings
+    { SYN(MAGENTA), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // E numbers, true/null/None
+    { SYN(BLUE),    FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // F functions, keys (def:identifier)
+    { SYN(YELLOW),  FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // G types, variables (def:type)
+    { SYN(ORANGE),  FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // H markdown heading 1
+    { SYN(MAGENTA), FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // I markdown bold
+    { SYN(GREEN),   FL_COURIER_ITALIC, DEFAULT_FONT_SIZE, 0 }, // J markdown italic
+    { SYN(YELLOW),  FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // K markdown code
+    { SYN(BLUE),    FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // L markdown link text
+    { SYN(RED),     FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // M markdown markers (bullets, >, |, ```)
+    { SYN(VIOLET),  FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // N preprocessor, decorators (def:preprocessor)
+    { SYN(GREEN),   FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // O escapes, operators (def:special-char, def:operator)
+    { SYN(YELLOW),  FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // P markdown heading 2
+    { SYN(GREEN),   FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // Q markdown heading 3
+    { SYN(CYAN),    FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // R markdown heading 4
+    { SYN(BLUE),    FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // S markdown heading 5
+    { SYN(VIOLET),  FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // T markdown heading 6
+    { SYN(CYAN),    FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // U markdown link destinations, URLs
+    { SYN(VIOLET),  FL_COURIER,        DEFAULT_FONT_SIZE, 0 }  // V markdown block quotes
 };
+#undef SYN
 
 static std::string url_decode(const std::string& s) {
     std::string out;
@@ -223,6 +243,12 @@ void TextEditorApp::restyle_tab(TabData* tab) {
     std::string text = buffer_range(tab->buffer, 0, length);
     std::string styles = Highlighter::highlight(tab->language, text);
     styles.resize(static_cast<size_t>(length), 'A');
+
+    // first document with private-use glyphs: look for an icon font (once)
+    TextEditorApp* app = tab->tabs ? static_cast<TextEditorApp*>(tab->tabs->top_window()) : nullptr;
+    if (app && !app->icon_font_resolved_ &&
+        std::any_of(styles.begin(), styles.end(), [](char c) { return c >= 'A' + Highlighter::ICON_STYLE_OFFSET; }))
+        app->resolve_icon_font();
 
     std::string old_styles = buffer_range(sbuf, 0, sbuf->length());
     if (old_styles.size() != styles.size()) {
@@ -504,11 +530,23 @@ void TextEditorApp::window_close_cb(Fl_Widget*, void* data) {
 
 TextEditorApp::TextEditorApp(int width, int height, const char* title)
     : Fl_Double_Window(width, height, title), font_size_(DEFAULT_FONT_SIZE),
-      find_dialog_(nullptr), replace_dialog_(nullptr) {
+      find_dialog_(nullptr), replace_dialog_(nullptr), icon_font_resolved_(false) {
 
-    Fl_Color bg_color = fl_rgb_color(40, 44, 52);
-    Fl_Color panel_color = fl_rgb_color(33, 37, 43);
-    Fl_Color text_color = fl_rgb_color(171, 178, 191);
+    // saved font size and optional icon font override
+    settings_.load(home_file(".flitpad_config"));
+    font_size_ = settings_.get_int("font_size", DEFAULT_FONT_SIZE, MIN_FONT_SIZE, MAX_FONT_SIZE);
+    icon_font_name_ = settings_.get("icon_font");
+    for (int i = 0; i < STYLE_COUNT; ++i) {
+        if (i >= Highlighter::ICON_STYLE_OFFSET) {
+            style_table_[i] = style_table_[i - Highlighter::ICON_STYLE_OFFSET];
+            style_table_[i].font = FL_COURIER;
+        }
+        style_table_[i].size = font_size_;
+    }
+
+    Fl_Color bg_color = Theme::window_bg();
+    Fl_Color panel_color = Theme::panel_bg();
+    Fl_Color text_color = Theme::text();
 
     color(bg_color);
     callback(window_close_cb, this);
@@ -535,7 +573,7 @@ TextEditorApp::TextEditorApp(int width, int height, const char* title)
 
     status_bar_ = new Fl_Box(10, height - 35, width - 20, 25, " Ready | UTF-8");
     status_bar_->box(FL_FLAT_BOX);
-    status_bar_->color(fl_rgb_color(33, 37, 43));
+    status_bar_->color(panel_color);
     status_bar_->labelfont(FL_HELVETICA);
     status_bar_->labelsize(12);
     status_bar_->labelcolor(text_color);
@@ -585,6 +623,8 @@ TextEditorApp::TextEditorApp(int width, int height, const char* title)
 TextEditorApp::~TextEditorApp() {
     Fl::remove_timeout(poll_commands_cb, this);
     for (size_t i = 0; i < open_tabs_.size(); ++i) Fl::remove_timeout(restyle_timeout_cb, open_tabs_[i]);
+    settings_.set_int("font_size", font_size_);
+    settings_.save(home_file(".flitpad_config"));
     save_session();
     std::remove(get_lock_file_path().c_str());
     std::remove(get_command_file_path().c_str());
@@ -709,21 +749,21 @@ void TextEditorApp::apply_language(TabData* tab) {
 
 TabData* TextEditorApp::create_tab(const std::string& path, const std::string& name, const std::string& content,
                                    bool untitled, bool crlf) {
-    Fl_Color editor_bg = fl_rgb_color(30, 33, 39);
-    Fl_Color editor_text = fl_rgb_color(220, 223, 228);
-    Fl_Color cursor_color = fl_rgb_color(97, 175, 239);
-    Fl_Color select_color = fl_rgb_color(50, 115, 195);
+    Fl_Color editor_bg = Theme::editor_bg();
+    Fl_Color editor_text = Theme::text_strong();
+    Fl_Color cursor_color = Theme::cursor();
+    Fl_Color select_color = Theme::selection();
 
     tabs_->begin();
     Fl_Group* grp = new Fl_Group(240, 35, w() - 250, h() - 80);
     grp->copy_label(name.c_str());
-    grp->color(fl_rgb_color(40, 44, 52));
+    grp->color(Theme::window_bg());
 
     Fl_Text_Editor* editor = new Fl_Text_Editor(245, 40, w() - 260, h() - 90);
     editor->linenumber_width(static_cast<int>(font_size_ * 3.3));
     editor->linenumber_size(std::max(8, font_size_ - 3));
-    editor->linenumber_fgcolor(fl_rgb_color(92, 99, 112));
-    editor->linenumber_bgcolor(fl_rgb_color(33, 37, 43));
+    editor->linenumber_fgcolor(Theme::line_number_fg());
+    editor->linenumber_bgcolor(Theme::line_number_bg());
 
     Fl_Text_Buffer* textbuf = new Fl_Text_Buffer();
     Fl_Text_Buffer* stylebuf = new Fl_Text_Buffer();
@@ -1208,8 +1248,33 @@ void TextEditorApp::toggle_comment() {
     tab->editor->show_insert_position();
 }
 
+// FLTK 1.3 draws each style run with one font and has no per-glyph fallback, so
+// private-use characters (FontAwesome & co.) would show as empty boxes in a
+// monospace font. Their style twins use an icon font instead; look for one among
+// the installed fonts. Done lazily, because listing every font is slow-ish.
+void TextEditorApp::resolve_icon_font() {
+    icon_font_resolved_ = true;
+    const int count = Fl::set_fonts("*");
+    int best = -1, best_score = 0, best_attr = 0;
+    std::string best_name;
+    for (int i = 0; i < count; ++i) {
+        int attr = 0;
+        const char* name = Fl::get_font_name(static_cast<Fl_Font>(i), &attr);
+        if (!name) continue;
+        int sc = IconFont::score(name, attr, icon_font_name_);
+        if (sc > best_score) { best_score = sc; best = i; best_attr = attr; best_name = name; }
+    }
+    if (best < 0) {
+        set_status_message("No icon font found: install FontAwesome or a Nerd Font, or set icon_font=NAME in ~/.flitpad_config");
+        return;
+    }
+    for (int i = Highlighter::ICON_STYLE_OFFSET; i < STYLE_COUNT; ++i) style_table_[i].font = static_cast<Fl_Font>(best);
+    for (size_t i = 0; i < open_tabs_.size(); ++i) open_tabs_[i]->editor->redraw();
+    set_status_message("Icon font: " + best_name + ((best_attr & 1) ? " (bold)" : ""));
+}
+
 void TextEditorApp::set_font_size(int size) {
-    size = std::max(9, std::min(40, size));
+    size = std::max(MIN_FONT_SIZE, std::min(MAX_FONT_SIZE, size));
     font_size_ = size;
     for (int i = 0; i < STYLE_COUNT; ++i) style_table_[i].size = size;
     for (size_t i = 0; i < open_tabs_.size(); ++i) {
