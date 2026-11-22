@@ -33,6 +33,27 @@ std::string outdent_lines(const std::string& block, int width);
 bool toggle_line_comments(const std::string& language, const std::string& block,
                           std::string& out, bool* all_commented = 0);
 
+// ASCII-only case conversion (UTF-8 multi-byte characters are left untouched).
+std::string change_case(const std::string& text, bool upper);
+
+// A single replacement of doc[start, end) by `text`, plus where the caret and
+// the selection (sel_start < 0: none) end up afterwards. valid == false: nothing to do.
+struct RegionEdit {
+    bool valid;
+    int start, end;
+    std::string text;
+    int cursor;
+    int sel_start, sel_end;
+    RegionEdit() : valid(false), start(0), end(0), cursor(0), sel_start(-1), sel_end(-1) {}
+};
+
+// Whole-line commands on `doc`, acting on the lines touched by the selection
+// [sel_start, sel_end) or, without a selection, on the caret's line.
+// A selection that ends right after a newline does not include the next line.
+RegionEdit duplicate_lines(const std::string& doc, int sel_start, int sel_end, int cursor, bool has_selection);
+RegionEdit delete_lines(const std::string& doc, int sel_start, int sel_end, int cursor, bool has_selection);
+RegionEdit move_lines(const std::string& doc, int sel_start, int sel_end, int cursor, bool has_selection, bool up);
+
 }  // namespace EditHelpers
 
 #endif

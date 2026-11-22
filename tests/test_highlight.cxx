@@ -318,6 +318,69 @@ static void test_edit_helpers() {
     CHECK(Highlighter::line_comment_prefix("Makefile") == "#");
 }
 
+static std::string apply_edit(std::string doc, const EditHelpers::RegionEdit& r) {
+    doc.replace(r.start, r.end - r.start, r.text);
+    return doc;
+}
+
+static void test_line_commands() {
+    using namespace EditHelpers;
+    RegionEdit r;
+    // duplicate
+    r = duplicate_lines("a\nb\nc", 2, 2, 2, false);
+    CHECK(r.valid && apply_edit("a\nb\nc", r) == "a\nb\nb\nc" && r.cursor == 4 && r.sel_start < 0);
+    r = duplicate_lines("a\nb", 3, 3, 3, false);                          // last line, no trailing newline
+    CHECK(apply_edit("a\nb", r) == "a\nb\nb" && r.cursor == 5);
+    r = duplicate_lines("a\nb\nc", 0, 3, 3, true);                        // selection over two lines
+    CHECK(apply_edit("a\nb\nc", r) == "a\nb\na\nb\nc" && r.sel_start == 4 && r.sel_end == 7);
+    r = duplicate_lines("a\nb\n", 0, 2, 2, true);                         // selection ends after the newline: only line "a"
+    CHECK(apply_edit("a\nb\n", r) == "a\na\nb\n");
+    r = duplicate_lines("", 0, 0, 0, false);
+    CHECK(r.valid && apply_edit("", r) == "\n");
+    // delete
+    r = delete_lines("a\nb\nc", 2, 2, 2, false);
+    CHECK(apply_edit("a\nb\nc", r) == "a\nc" && r.cursor == 2);
+    r = delete_lines("a\nb\nc", 4, 4, 4, false);                          // last line takes the break before it
+    CHECK(apply_edit("a\nb\nc", r) == "a\nb" && r.cursor == 3);
+    r = delete_lines("abc", 1, 1, 1, false);
+    CHECK(apply_edit("abc", r) == "" && r.cursor == 0);
+    r = delete_lines("a\nb\nc\nd", 2, 5, 5, true);                       // two lines
+    CHECK(apply_edit("a\nb\nc\nd", r) == "a\nd");
+    r = delete_lines("a\n", 2, 2, 2, false);                               // empty last line
+    CHECK(apply_edit("a\n", r) == "a");
+    // move up
+    r = move_lines("a\nb\nc", 3, 3, 3, false, true);
+    CHECK(r.valid && apply_edit("a\nb\nc", r) == "b\na\nc" && r.cursor == 1);
+    r = move_lines("a\nb\nc", 0, 0, 0, false, true);
+    CHECK(!r.valid);                                                      // already on top
+    r = move_lines("a\nb\nc\nd", 2, 5, 5, true, true);                   // selection b..c moves above a
+    CHECK(apply_edit("a\nb\nc\nd", r) == "b\nc\na\nd" && r.sel_start == 0 && r.sel_end == 3);
+    // move down
+    r = move_lines("a\nb\nc", 0, 0, 0, false, false);
+    CHECK(r.valid && apply_edit("a\nb\nc", r) == "b\na\nc" && r.cursor == 2);
+    r = move_lines("a\nb\nc", 4, 4, 4, false, false);
+    CHECK(!r.valid);                                                      // already at the bottom
+    r = move_lines("a\n\nc", 0, 0, 0, false, false);                      // next line is empty
+    CHECK(apply_edit("a\n\nc", r) == "\na\nc");
+    r = move_lines("a\nb\nc\nd", 0, 3, 3, true, false);                  // selection a..b moves below c
+    CHECK(apply_edit("a\nb\nc\nd", r) == "c\na\nb\nd" && r.sel_start == 2 && r.sel_end == 5);
+    // out-of-range arguments are clamped instead of crashing
+    r = duplicate_lines("ab", 99, 120, 99, true);
+    CHECK(r.valid);
+    r = move_lines("ab", -5, 40, -3, true, false);
+    CHECK(!r.valid);
+    // round trip: moving down then up restores the document
+    std::string doc = "one\ntwo\nthree\nfour";
+    r = move_lines(doc, 5, 5, 5, false, false);
+    std::string moved = apply_edit(doc, r);
+    r = move_lines(moved, r.cursor, r.cursor, r.cursor, false, true);
+    CHECK(apply_edit(moved, r) == doc);
+    // case
+    CHECK(EditHelpers::change_case("aBc \xc3\xa9z1", true) == "ABC \xc3\xa9Z1");
+    CHECK(EditHelpers::change_case("aBc \xc3\x89Z1", false) == "abc \xc3\x89z1");
+    CHECK(EditHelpers::change_case("", true).empty());
+}
+
 int main() {
     test_detection();
     test_markdown();
@@ -325,6 +388,7 @@ int main() {
     test_icons();
     test_robustness();
     test_edit_helpers();
+    test_line_commands();
     std::cout << (checks - failures) << "/" << checks << " checks passed\n";
     return failures ? 1 : 0;
 }

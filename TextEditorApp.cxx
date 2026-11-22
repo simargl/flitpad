@@ -5,11 +5,15 @@
 #include "EditHelpers.h"
 #include "PathUtil.h"
 #include "Theme.h"
+#include "CodeEditor.h"
 #include "IconFont.h"
 #include <FL/filename.H>
 #include <FL/fl_ask.H>
 #include <FL/Fl_RGB_Image.H>
 #include <FL/Fl_Native_File_Chooser.H>
+#include <FL/Fl_Menu_Item.H>
+#include <ctime>
+#include <cstdint>
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
@@ -24,6 +28,15 @@ static const int DEFAULT_FONT_SIZE = 17;
 static const int MIN_FONT_SIZE = 9;
 static const int MAX_FONT_SIZE = 40;
 static const int TAB_WIDTH = 4;
+
+// context-menu / shortcut commands
+enum MenuCommand {
+    CMD_UNDO = 1, CMD_CUT, CMD_COPY, CMD_PASTE, CMD_DELETE, CMD_SELECT_ALL,
+    CMD_INSERT_DATE, CMD_INSERT_TIME, CMD_INSERT_DATETIME,
+    CMD_COMMENT, CMD_INDENT, CMD_OUTDENT, CMD_UPPER, CMD_LOWER,
+    CMD_DUPLICATE_LINE, CMD_DELETE_LINE, CMD_LINE_UP, CMD_LINE_DOWN,
+    CMD_FIND_WORD, CMD_GOTO_LINE
+};
 
 // 16x16 XPM Icon for Folders (Gold/Yellow)
 static const char* folder_xpm[] = {
@@ -759,7 +772,7 @@ TabData* TextEditorApp::create_tab(const std::string& path, const std::string& n
     grp->copy_label(name.c_str());
     grp->color(Theme::window_bg());
 
-    Fl_Text_Editor* editor = new Fl_Text_Editor(245, 40, w() - 260, h() - 90);
+    Fl_Text_Editor* editor = new CodeEditor(245, 40, w() - 260, h() - 90);
     editor->linenumber_width(static_cast<int>(font_size_ * 3.3));
     editor->linenumber_size(std::max(8, font_size_ - 3));
     editor->linenumber_fgcolor(Theme::line_number_fg());
@@ -1248,6 +1261,199 @@ void TextEditorApp::toggle_comment() {
     tab->editor->show_insert_position();
 }
 
+// Applies `f` to the whole lines touched by the selection (or the caret's line).
+static void transform_lines(TabData* tab, bool (*f)(const std::string&, std::string&)) {
+    int a, b;
+    bool has_sel;
+    selection_lines(tab, a, b, has_sel);
+    std::string block = buffer_range(tab->buffer, a, b), out;
+    if (!f(block, out) || out == block) return;
+    int cursor = tab->editor->insert_position();
+    tab->buffer->replace(a, b, out.c_str());
+    if (has_sel) {
+        tab->buffer->select(a, a + static_cast<int>(out.size()));
+        tab->editor->insert_position(a + static_cast<int>(out.size()));
+    } else {
+        int delta = static_cast<int>(out.size()) - static_cast<int>(block.size());
+        tab->editor->insert_position(std::max(a, cursor + delta));
+    }
+    tab->editor->show_insert_position();
+}
+
+static bool indent_block(const std::string& in, std::string& out) { out = EditHelpers::indent_lines(in, TAB_WIDTH); return true; }
+static bool outdent_block(const std::string& in, std::string& out) { out = EditHelpers::outdent_lines(in, TAB_WIDTH); return true; }
+
+static void change_selection_case(TabData* tab, bool upper) {
+    int s = 0, e = 0;
+    if (!tab->buffer->selection_position(&s, &e) || e <= s) return;
+    std::string out = EditHelpers::change_case(buffer_range(tab->buffer, s, e), upper);
+    tab->buffer->replace(s, e, out.c_str());     // same length: ASCII only
+    tab->buffer->select(s, s + static_cast<int>(out.size()));
+    tab->editor->insert_position(s + static_cast<int>(out.size()));
+}
+
+static void insert_at_cursor(TabData* tab, const std::string& text) {
+    Fl_Text_Buffer* buf = tab->buffer;
+    int s = 0, e = 0, pos = tab->editor->insert_position();
+    if (buf->selection_position(&s, &e) && e > s) {
+        buf->unselect();
+        buf->replace(s, e, text.c_str());
+        pos = s;
+    } else {
+        buf->insert(pos, text.c_str());
+    }
+    tab->editor->insert_position(pos + static_cast<int>(text.size()));
+    tab->editor->show_insert_position();
+}
+
+typedef EditHelpers::RegionEdit (*LineCommand)(const std::string&, int, int, int, bool);
+
+static void apply_region_edit(TabData* tab, const EditHelpers::RegionEdit& r) {
+    if (!r.valid) return;
+    tab->buffer->unselect();
+    tab->buffer->replace(r.start, r.end, r.text.c_str());
+    if (r.sel_start >= 0) tab->buffer->select(r.sel_start, r.sel_end);
+    tab->editor->insert_position(r.cursor);
+    tab->editor->show_insert_position();
+}
+
+static void run_line_command(TabData* tab, LineCommand cmd) {
+    Fl_Text_Buffer* buf = tab->buffer;
+    int s = 0, e = 0;
+    bool has_sel = buf->selection_position(&s, &e) != 0 && e > s;
+    if (!has_sel) s = e = tab->editor->insert_position();
+    apply_region_edit(tab, cmd(buffer_range(buf, 0, buf->length()), s, e, tab->editor->insert_position(), has_sel));
+}
+
+static EditHelpers::RegionEdit move_up_cmd(const std::string& d, int s, int e, int c, bool h) { return EditHelpers::move_lines(d, s, e, c, h, true); }
+static EditHelpers::RegionEdit move_down_cmd(const std::string& d, int s, int e, int c, bool h) { return EditHelpers::move_lines(d, s, e, c, h, false); }
+
+// Selected text, or the word under the caret; the caret ends up behind it so that
+// the search finds the *next* occurrence.
+void TextEditorApp::find_word_under_cursor() {
+    TabData* tab = get_current_tab();
+    if (!tab) return;
+    Fl_Text_Buffer* buf = tab->buffer;
+    int s = 0, e = 0;
+    std::string query;
+    if (buf->selection_position(&s, &e) && e > s && e - s <= 200) {
+        query = buffer_range(buf, s, e);
+    } else {
+        int pos = tab->editor->insert_position();
+        s = buf->word_start(pos);
+        e = buf->word_end(pos);
+        if (e > s) query = buffer_range(buf, s, e);
+    }
+    if (query.empty() || query.find('\n') != std::string::npos) {
+        set_status_message("Nothing to search for: select text or put the caret on a word");
+        return;
+    }
+    if (!find_dialog_) find_dialog_ = new FindReplaceDialog(this, false);   // so F3 repeats this search
+    find_dialog_->set_query(query);
+    buf->unselect();
+    tab->editor->insert_position(e);
+    find_text(query, true);
+}
+
+void TextEditorApp::run_menu_command(int command) {
+    TabData* tab = get_current_tab();
+    if (!tab) return;
+    char text[64];
+    time_t now = std::time(nullptr);
+    switch (command) {
+        case CMD_UNDO:       Fl_Text_Editor::kf_undo(0, tab->editor); break;
+        case CMD_CUT:        Fl_Text_Editor::kf_cut(0, tab->editor); break;
+        case CMD_COPY:       Fl_Text_Editor::kf_copy(0, tab->editor); break;
+        case CMD_PASTE:      Fl_Text_Editor::kf_paste(0, tab->editor); break;
+        case CMD_SELECT_ALL: Fl_Text_Editor::kf_select_all(0, tab->editor); break;
+        case CMD_DELETE:
+            if (tab->buffer->selected()) tab->buffer->remove_selection();
+            break;
+        case CMD_INSERT_DATE:
+        case CMD_INSERT_TIME:
+        case CMD_INSERT_DATETIME: {
+            const char* fmt = command == CMD_INSERT_DATE ? "%Y-%m-%d" : command == CMD_INSERT_TIME ? "%H:%M:%S" : "%Y-%m-%d %H:%M:%S";
+            std::strftime(text, sizeof(text), fmt, std::localtime(&now));
+            insert_at_cursor(tab, text);
+            break;
+        }
+        case CMD_COMMENT:        toggle_comment(); break;
+        case CMD_INDENT:         transform_lines(tab, indent_block); break;
+        case CMD_OUTDENT:        transform_lines(tab, outdent_block); break;
+        case CMD_UPPER:          change_selection_case(tab, true); break;
+        case CMD_LOWER:          change_selection_case(tab, false); break;
+        case CMD_DUPLICATE_LINE: run_line_command(tab, EditHelpers::duplicate_lines); break;
+        case CMD_DELETE_LINE:    run_line_command(tab, EditHelpers::delete_lines); break;
+        case CMD_LINE_UP:        run_line_command(tab, move_up_cmd); break;
+        case CMD_LINE_DOWN:      run_line_command(tab, move_down_cmd); break;
+        case CMD_FIND_WORD:      find_word_under_cursor(); break;
+        case CMD_GOTO_LINE:      goto_line(); break;
+        default: break;
+    }
+    tab->editor->take_focus();
+    update_status_bar();
+}
+
+// Right-click menu, modelled on Geany's editor popup.
+void TextEditorApp::show_context_menu() {
+    TabData* tab = get_current_tab();
+    if (!tab) return;
+
+    const int need_sel = tab->buffer->selected() ? 0 : FL_MENU_INACTIVE;
+    const int need_comment = Highlighter::line_comment_prefix(tab->language).empty() ? FL_MENU_INACTIVE : 0;
+
+    time_t now = std::time(nullptr);
+    char d[32], t[32], dt[48];
+    std::strftime(d, sizeof(d), "%Y-%m-%d", std::localtime(&now));
+    std::strftime(t, sizeof(t), "%H:%M:%S", std::localtime(&now));
+    std::strftime(dt, sizeof(dt), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
+    const std::string date_label = std::string("Date:  ") + d;
+    const std::string time_label = std::string("Time:  ") + t;
+    const std::string datetime_label = std::string("Date and Time:  ") + dt;
+
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"   // FLTK menu tables list only the first few fields
+#endif
+#define CMD(c) reinterpret_cast<void*>(static_cast<intptr_t>(c))
+    Fl_Menu_Item items[] = {
+        { "Undo",       FL_CTRL + 'z', 0, CMD(CMD_UNDO),       FL_MENU_DIVIDER },
+        { "Cut",        FL_CTRL + 'x', 0, CMD(CMD_CUT),        need_sel },
+        { "Copy",       FL_CTRL + 'c', 0, CMD(CMD_COPY),       need_sel },
+        { "Paste",      FL_CTRL + 'v', 0, CMD(CMD_PASTE),      0 },
+        { "Delete",     0,             0, CMD(CMD_DELETE),     need_sel | FL_MENU_DIVIDER },
+        { "Select All", FL_CTRL + 'a', 0, CMD(CMD_SELECT_ALL), FL_MENU_DIVIDER },
+        { "Insert",     0, 0, 0, FL_SUBMENU },
+            { date_label.c_str(),     0, 0, CMD(CMD_INSERT_DATE),     0 },
+            { time_label.c_str(),     0, 0, CMD(CMD_INSERT_TIME),     0 },
+            { datetime_label.c_str(), 0, 0, CMD(CMD_INSERT_DATETIME), 0 },
+            { 0 },
+        { "Format",     0, 0, 0, FL_SUBMENU },
+            { "Toggle Comment",        FL_CTRL + '/', 0, CMD(CMD_COMMENT), need_comment | FL_MENU_DIVIDER },
+            { "Increase Indent",       0, 0, CMD(CMD_INDENT),  0 },
+            { "Decrease Indent",       0, 0, CMD(CMD_OUTDENT), FL_MENU_DIVIDER },
+            { "Convert to Upper Case", 0, 0, CMD(CMD_UPPER),   need_sel },
+            { "Convert to Lower Case", 0, 0, CMD(CMD_LOWER),   need_sel },
+            { 0 },
+        { "Line",       0, 0, 0, FL_SUBMENU | FL_MENU_DIVIDER },
+            { "Duplicate Line",  FL_CTRL + 'd',  0, CMD(CMD_DUPLICATE_LINE), 0 },
+            { "Delete Line",     FL_CTRL + 'k',  0, CMD(CMD_DELETE_LINE),    FL_MENU_DIVIDER },
+            { "Move Line Up",    FL_ALT + FL_Up,   0, CMD(CMD_LINE_UP),      0 },
+            { "Move Line Down",  FL_ALT + FL_Down, 0, CMD(CMD_LINE_DOWN),    0 },
+            { 0 },
+        { "Find Word / Selection", 0,          0, CMD(CMD_FIND_WORD), 0 },
+        { "Go to Line...",         FL_CTRL + 'g', 0, CMD(CMD_GOTO_LINE), 0 },
+        { 0 }
+    };
+#undef CMD
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+    const Fl_Menu_Item* picked = items->popup(Fl::event_x(), Fl::event_y(), 0, 0, 0);
+    if (picked && picked->user_data()) run_menu_command(static_cast<int>(reinterpret_cast<intptr_t>(picked->user_data())));
+}
+
 // FLTK 1.3 draws each style run with one font and has no per-glyph fallback, so
 // private-use characters (FontAwesome & co.) would show as empty boxes in a
 // monospace font. Their style twins use an icon font instead; look for one among
@@ -1393,6 +1599,11 @@ int TextEditorApp::handle(int event) {
             return 1;
         }
 
+        if ((state & FL_ALT) && !(state & (FL_CTRL | FL_SHIFT)) && (key == FL_Up || key == FL_Down)) {
+            run_menu_command(key == FL_Up ? CMD_LINE_UP : CMD_LINE_DOWN);
+            return 1;
+        }
+
         if (state & FL_CTRL) {
             switch (key) {
                 case 's': case 'S':
@@ -1406,6 +1617,8 @@ int TextEditorApp::handle(int event) {
                 case 'h': case 'H': show_replace_dialog(); return 1;
                 case 'g': case 'G': goto_line(); return 1;
                 case '/': toggle_comment(); return 1;
+                case 'd': case 'D': run_menu_command(CMD_DUPLICATE_LINE); return 1;
+                case 'k': case 'K': run_menu_command(CMD_DELETE_LINE); return 1;
                 case '=': case '+': case FL_KP + '+': set_font_size(font_size_ + 1); return 1;
                 case '-': case FL_KP + '-': set_font_size(font_size_ - 1); return 1;
                 case '0': case FL_KP + '0': set_font_size(DEFAULT_FONT_SIZE); return 1;
@@ -1422,6 +1635,24 @@ int TextEditorApp::handle(int event) {
                     return 1;
                 default: break;
             }
+        }
+    }
+
+    // Right-click in the editor: like Geany, the caret moves to the click unless it
+    // landed inside the selection, then the context menu opens.
+    if (event == FL_PUSH && Fl::event_button() == FL_RIGHT_MOUSE) {
+        TabData* tab = get_current_tab();
+        if (tab && Fl::event_inside(tab->editor)) {
+            tab->editor->take_focus();
+            int pos = static_cast<CodeEditor*>(tab->editor)->position_at(Fl::event_x(), Fl::event_y());
+            int s = 0, e = 0;
+            if (!(tab->buffer->selection_position(&s, &e) && pos >= s && pos <= e)) {
+                tab->buffer->unselect();
+                tab->editor->insert_position(pos);
+            }
+            show_context_menu();
+            update_status_bar();
+            return 1;
         }
     }
 

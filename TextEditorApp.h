@@ -83,6 +83,9 @@ public:
     void toggle_comment();
     void set_font_size(int size);
     void resolve_icon_font();
+    void show_context_menu();
+    void run_menu_command(int command);
+    void find_word_under_cursor();
 
     // find / replace
     void show_find_dialog();

@@ -9,6 +9,7 @@
 * **Multi-tab editing** – open several files at once; middle-click a tab to close it.
 * **Syntax highlighting** for C, C++, C#, Java, JavaScript, TypeScript, Go, Rust, Python, Nim, PHP, SQL, Shell, Makefile, CMake, HTML/XML/SVG (with embedded `<script>`/`<style>`), CSS/SCSS, JSON, YAML, TOML, INI, diff and **Markdown**.
 * **Markdown highlighting** – headings (ATX and setext), **bold**, *italic*, ~~strikethrough~~, `inline code`, fenced code blocks highlighted in their own language (` ```cpp `), links, images, bare URLs, lists and task lists, block quotes, tables, horizontal rules, HTML comments and YAML front matter. Markdown and plain-text files soft-wrap.
+* **Right-click menu** (like Geany's) – Undo, Cut/Copy/Paste/Delete, Select All, Insert date/time, Format (toggle comment, indent, upper/lower case), Line (duplicate, delete, move up/down), Find word/selection, Go to line. Right-click moves the caret unless you click inside the selection; entries that need a selection are greyed out otherwise.
 * **Smart editing** – auto-indent, extra indent after `{ ( [` (and `:` in Python/YAML), `{|}` splits into an indented block, Tab/Shift+Tab indent and outdent whole selections, Markdown lists/quotes continue on Enter (Enter on an empty item ends the list), comment toggle for every language that has line comments.
 * **File browser sidebar** – open, create, rename (`F2`) and delete (`Delete`) files; `../` navigates up. Keys only act on the sidebar while it has focus.
 * **Find & Replace** – Enter = find next, `F3` / `Shift+F3` repeat the search, the dialog is pre-filled from your selection, Replace All is a single fast edit.
@@ -54,6 +55,8 @@ sudo make install
 | **F3** / **Shift + F3** | Find next / previous |
 | **Ctrl + G** | Go to line |
 | **Ctrl + /** | Toggle line comment |
+| **Ctrl + D** / **Ctrl + K** | Duplicate / delete line(s) |
+| **Alt + Up** / **Alt + Down** | Move line(s) up / down |
 | **Tab** / **Shift + Tab** | Indent / outdent (selection aware) |
 | **Ctrl + Tab** / **Ctrl + Shift + Tab** | Next / previous tab |
 | **Ctrl + =** / **Ctrl + -** / **Ctrl + 0** | Zoom in / out / reset |

@@ -1,6 +1,7 @@
 #include "EditHelpers.h"
 #include "Highlighter.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <vector>
@@ -43,7 +44,104 @@ bool only_blanks(const std::string& s) {
     return true;
 }
 
+int line_start_of(const std::string& d, int pos) {
+    while (pos > 0 && d[pos - 1] != '\n') --pos;
+    return pos;
+}
+
+int line_end_of(const std::string& d, int pos) {
+    const int n = static_cast<int>(d.size());
+    while (pos < n && d[pos] != '\n') ++pos;
+    return pos;
+}
+
+struct Span {
+    int a, b;   // first byte of the first line, end (before '\n') of the last line
+    int s, e;   // selection (or caret), clamped
+    int cursor;
+};
+
+Span line_span(const std::string& d, int s, int e, int cursor, bool has_sel) {
+    const int n = static_cast<int>(d.size());
+    Span sp;
+    sp.cursor = std::min(std::max(cursor, 0), n);
+    if (!has_sel) s = e = sp.cursor;
+    s = std::min(std::max(s, 0), n);
+    e = std::min(std::max(e, 0), n);
+    if (e < s) std::swap(s, e);
+    int last = e;
+    if (has_sel && last > s && d[last - 1] == '\n') --last;   // selection ends at a line start
+    sp.s = s;
+    sp.e = e;
+    sp.a = line_start_of(d, s);
+    sp.b = line_end_of(d, last);
+    return sp;
+}
+
+void shift_selection(RegionEdit& r, const Span& sp, bool has_sel, int shift) {
+    r.cursor = sp.cursor + shift;
+    if (has_sel) { r.sel_start = sp.s + shift; r.sel_end = sp.e + shift; }
+}
+
 }  // namespace
+
+std::string change_case(const std::string& text, bool upper) {
+    std::string out = text;
+    for (size_t i = 0; i < out.size(); ++i) {
+        unsigned char c = static_cast<unsigned char>(out[i]);
+        if (c < 0x80) out[i] = static_cast<char>(upper ? std::toupper(c) : std::tolower(c));
+    }
+    return out;
+}
+
+RegionEdit duplicate_lines(const std::string& doc, int s, int e, int cursor, bool has_sel) {
+    RegionEdit r;
+    Span sp = line_span(doc, s, e, cursor, has_sel);
+    std::string block = doc.substr(sp.a, sp.b - sp.a);
+    r.valid = true;
+    r.start = r.end = sp.b;
+    r.text = "\n" + block;
+    shift_selection(r, sp, has_sel, static_cast<int>(block.size()) + 1);   // caret / selection move onto the copy
+    return r;
+}
+
+RegionEdit delete_lines(const std::string& doc, int s, int e, int cursor, bool has_sel) {
+    RegionEdit r;
+    Span sp = line_span(doc, s, e, cursor, has_sel);
+    r.valid = true;
+    r.start = sp.a;
+    r.end = sp.b;
+    if (sp.b < static_cast<int>(doc.size())) r.end = sp.b + 1;       // take the line break with the line
+    else if (sp.a > 0) r.start = sp.a - 1;                           // last line: take the break before it
+    r.cursor = r.start;
+    return r;
+}
+
+RegionEdit move_lines(const std::string& doc, int s, int e, int cursor, bool has_sel, bool up) {
+    RegionEdit r;
+    Span sp = line_span(doc, s, e, cursor, has_sel);
+    const std::string block = doc.substr(sp.a, sp.b - sp.a);
+    if (up) {
+        if (sp.a == 0) return r;
+        const int ps = line_start_of(doc, sp.a - 1);
+        const std::string prev = doc.substr(ps, sp.a - 1 - ps);
+        r.valid = true;
+        r.start = ps;
+        r.end = sp.b;
+        r.text = block + "\n" + prev;
+        shift_selection(r, sp, has_sel, -(static_cast<int>(prev.size()) + 1));
+    } else {
+        if (sp.b >= static_cast<int>(doc.size())) return r;
+        const int ns = sp.b + 1, ne = line_end_of(doc, ns);
+        const std::string next = doc.substr(ns, ne - ns);
+        r.valid = true;
+        r.start = sp.a;
+        r.end = ne;
+        r.text = next + "\n" + block;
+        shift_selection(r, sp, has_sel, static_cast<int>(next.size()) + 1);
+    }
+    return r;
+}
 
 NewlineEdit smart_newline(const std::string& lang, const std::string& before,
                           const std::string& after, int indent_width) {
