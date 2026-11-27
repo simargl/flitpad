@@ -1,6 +1,7 @@
 #include "FindReplaceDialog.h"
 #include "TextEditorApp.h"
 #include "Theme.h"
+#include <FL/Fl_Check_Button.H>
 #include <FL/fl_draw.H>
 #include <cstring>
 
@@ -95,6 +96,25 @@ FindReplaceDialog::FindReplaceDialog(TextEditorApp* app, bool replace_mode)
 
     end();
     set_non_modal();
+    apply_theme();
+}
+
+void FindReplaceDialog::apply_theme() {
+    color(Theme::window_bg());
+    for (int i = 0; i < children(); ++i) {
+        Fl_Widget* w = child(i);
+        if (Fl_Input* in = dynamic_cast<Fl_Input*>(w)) {
+            in->color(Theme::panel_bg());
+            in->textcolor(Theme::text_strong());
+            in->labelcolor(Theme::text());
+        } else if (dynamic_cast<Fl_Check_Button*>(w)) {
+            w->labelcolor(Theme::text());
+        } else if (dynamic_cast<Fl_Button*>(w)) {
+            w->color(Theme::button_bg());
+            w->labelcolor(Theme::text_strong());
+        }
+    }
+    redraw();
 }
 
 void FindReplaceDialog::find_next_cb(Fl_Widget*, void* data) {

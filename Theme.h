@@ -1,71 +1,53 @@
-// Theme.h - every colour Flitpad uses lives here.
+// Theme.h - the colours the widgets use, taken from the active colour scheme.
 //
-// GtkSourceView's "solarized-dark" scheme (Craig Russell, Solarized palette by
-// Ethan Schoonover). The values below are taken from that scheme file:
-//   text        base1 on base03        selection   base00 (text on it: base03 there)
-//   cursor      base1                  line-numbers base01 on base02
-// To try another theme, change the palette and the role functions below;
-// nothing else hard-codes a colour.
+// The scheme can be switched at run time (View menu); set_scheme() + apply() and
+// then re-colouring the widgets is all that takes (TextEditorApp::apply_theme()).
+// The scheme definitions live in ColorSchemes.cxx.
 #ifndef THEME_H
 #define THEME_H
 
 #include <FL/Fl.H>
 #include "ColorMath.h"
+#include "ColorSchemes.h"
 
 namespace Theme {
 
-// Solarized palette
-static const unsigned BASE03 = 0x002b36;  // background
-static const unsigned BASE02 = 0x073642;  // background highlights
-static const unsigned BASE01 = 0x586e75;  // comments, secondary content
-static const unsigned BASE00 = 0x657b83;
-static const unsigned BASE0  = 0x839496;  // body text
-static const unsigned BASE1  = 0x93a1a1;  // emphasized text
-static const unsigned BASE2  = 0xeee8d5;
-static const unsigned BASE3  = 0xfdf6e3;
-static const unsigned YELLOW  = 0xb58900;
-static const unsigned ORANGE  = 0xcb4b16;
-static const unsigned RED     = 0xdc322f;
-static const unsigned MAGENTA = 0xd33682;
-static const unsigned VIOLET  = 0x6c71c4;
-static const unsigned BLUE    = 0x268bd2;
-static const unsigned CYAN    = 0x2aa198;
-static const unsigned GREEN   = 0x859900;
+inline const ColorSchemes::Scheme*& scheme_ref() {
+    static const ColorSchemes::Scheme* s = ColorSchemes::fallback(true);
+    return s;
+}
+inline const ColorSchemes::Scheme& scheme() { return *scheme_ref(); }
+inline void set_scheme(const ColorSchemes::Scheme* s) { if (s) scheme_ref() = s; }
 
 inline Fl_Color rgb(unsigned hex) {
     return fl_rgb_color(static_cast<uchar>((hex >> 16) & 0xff), static_cast<uchar>((hex >> 8) & 0xff),
                         static_cast<uchar>(hex & 0xff));
 }
 
-// Colour of a syntax style. FLTK replaces colours that are too close to the
-// background's luminance with plain white (see ColorMath.h), which on base03
-// would turn most of the palette white. syntax() keeps the hue and brightens
-// the colour just enough to survive; colours that are bright enough (base1,
-// yellow, green) come out unchanged.
-inline Fl_Color syntax(unsigned hex, int min_diff = 112) {
-    return rgb(ColorMath::lifted(hex, BASE03, min_diff));
-}
+// Sidebar, status bar, menus and input fields sit on a darker (dark
+// schemes) or a hint darker (light schemes) shade of the editor background.
+inline unsigned panel_hex() { return ColorMath::blend(scheme().bg, 0x000000, scheme().dark ? 0.20 : 0.06); }
+inline unsigned ui_text_hex() { return ColorMath::ensure_contrast(scheme().text, panel_hex()); }
 
-// roles
-inline Fl_Color window_bg()      { return rgb(BASE03); }
-inline Fl_Color panel_bg()       { return rgb(BASE02); }   // sidebar, status bar, input fields
-inline Fl_Color editor_bg()      { return rgb(BASE03); }
-inline Fl_Color text()           { return rgb(BASE0); }   // UI labels (sidebar, status bar)
-inline Fl_Color text_strong()    { return rgb(BASE1); }   // editor and input text: the scheme's "text"
-inline Fl_Color line_number_fg() { return rgb(ColorMath::lifted(BASE01, BASE02, 106)); }
-inline Fl_Color line_number_bg() { return rgb(BASE02); }
-inline Fl_Color cursor()         { return rgb(BASE1); }
-inline Fl_Color selection()      { return rgb(BASE00); }
-inline Fl_Color button_bg()      { return rgb(BASE02); }
+inline Fl_Color window_bg()      { return rgb(scheme().bg); }
+inline Fl_Color editor_bg()      { return rgb(scheme().bg); }
+inline Fl_Color panel_bg()       { return rgb(panel_hex()); }
+inline Fl_Color text()           { return rgb(ui_text_hex()); }               // UI labels
+inline Fl_Color text_strong()    { return rgb(scheme().text); }               // editor and input text
+inline Fl_Color line_number_fg() { return rgb(ColorSchemes::gutter_fg(scheme())); }
+inline Fl_Color line_number_bg() { return rgb(scheme().gutter_bg); }
+inline Fl_Color cursor()         { return rgb(scheme().cursor); }
+inline Fl_Color selection()      { return rgb(scheme().selection); }
+inline Fl_Color button_bg()      { return panel_bg(); }
 
-// Global FLTK colours: widgets I don't colour explicitly (scrollbars, buttons, ...)
-// derive theirs from these.
+// Global FLTK colours: widgets that are not coloured explicitly (scrollbars,
+// buttons, ...) derive theirs from these. Call again after changing the scheme.
 inline void apply() {
-    Fl::scheme("gtk+");
-    Fl::background(0x00, 0x2b, 0x36);
-    Fl::background2(0x07, 0x36, 0x42);
-    Fl::foreground(0x83, 0x94, 0x96);
-    Fl::set_color(FL_SELECTION_COLOR, 0x65, 0x7b, 0x83);   // base00
+    const unsigned bg = scheme().bg, panel = panel_hex(), fg = ui_text_hex(), sel = scheme().selection;
+    Fl::background(static_cast<uchar>(bg >> 16), static_cast<uchar>(bg >> 8), static_cast<uchar>(bg));
+    Fl::background2(static_cast<uchar>(panel >> 16), static_cast<uchar>(panel >> 8), static_cast<uchar>(panel));
+    Fl::foreground(static_cast<uchar>(fg >> 16), static_cast<uchar>(fg >> 8), static_cast<uchar>(fg));
+    Fl::set_color(FL_SELECTION_COLOR, static_cast<uchar>(sel >> 16), static_cast<uchar>(sel >> 8), static_cast<uchar>(sel));
 }
 
 }  // namespace Theme

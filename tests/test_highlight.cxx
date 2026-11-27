@@ -156,11 +156,11 @@ static void test_code_languages() {
     CHECK(style_of("Plain Text", "if (x) // y", "if") == 'A');
 
     // operators are green in the languages where that reads well, plain elsewhere
-    CHECK(style_of("C++", "a = b + c;", "=") == SPECIAL);
-    CHECK(style_of("C++", "a = b + c;", "+") == SPECIAL);
-    CHECK(style_of("C++", "p->x", "->") == SPECIAL);
-    CHECK(style_of("Python", "x = 1", "=") == SPECIAL);
-    CHECK(style_of("JavaScript", "a => b", "=>") == SPECIAL);
+    CHECK(style_of("C++", "a = b + c;", "=") == OPERATOR);
+    CHECK(style_of("C++", "a = b + c;", "+") == OPERATOR);
+    CHECK(style_of("C++", "p->x", "->") == OPERATOR);
+    CHECK(style_of("Python", "x = 1", "=") == OPERATOR);
+    CHECK(style_of("JavaScript", "a => b", "=>") == OPERATOR);
     CHECK(style_of("C++", "a = b + c;", "b") == 'A');
     CHECK(style_of("Shell Script", "a=b", "=") == 'A');
     CHECK(style_of("Makefile", "A = b\n", "=") == 'A');
@@ -375,10 +375,6 @@ static void test_line_commands() {
     std::string moved = apply_edit(doc, r);
     r = move_lines(moved, r.cursor, r.cursor, r.cursor, false, true);
     CHECK(apply_edit(moved, r) == doc);
-    // case
-    CHECK(EditHelpers::change_case("aBc \xc3\xa9z1", true) == "ABC \xc3\xa9Z1");
-    CHECK(EditHelpers::change_case("aBc \xc3\x89Z1", false) == "abc \xc3\x89z1");
-    CHECK(EditHelpers::change_case("", true).empty());
 }
 
 int main() {

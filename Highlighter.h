@@ -11,10 +11,12 @@
 namespace Highlighter {
 
 // Style characters. They map 1:1 onto TextEditorApp::style_table_.
-// Colours follow GtkSourceView's solarized-dark scheme:
-//   KEYWORD = def:statement (orange)      STRING/NUMBER = def:constant (cyan)
-//   TYPE    = def:identifier (blue)       VARIABLE      = def:type (yellow)
-//   PREPROC = def:preprocessor (violet)   SPECIAL       = def:special-char (green)
+// The colour of each style comes from the active colour scheme (ColorSchemes.h);
+// the roles are:
+//   KEYWORD  statements (if, return)        STRING / NUMBER  literals and constants
+//   TYPE     functions, object keys         VARIABLE         type names, variables
+//   PREPROC  #include, decorators           SPECIAL          escape sequences
+//   OPERATOR + - = ->
 enum Style {
     PLAIN    = 'A',
     KEYWORD  = 'B',  // if, return, class ...
@@ -30,25 +32,26 @@ enum Style {
     LINK     = 'L',  // markdown link text
     MARKUP   = 'M',  // markdown markers: bullets, >, |, fences, rules
     PREPROC  = 'N',  // #include, #define, decorators, annotations
-    SPECIAL  = 'O',  // escape sequences in strings, operators
+    SPECIAL  = 'O',  // escape sequences inside strings
     HEADING2 = 'P',  // markdown heading levels 2..6 (HEADING3 .. HEADING6 follow)
     HEADING3 = 'Q',
     HEADING4 = 'R',
     HEADING5 = 'S',
     HEADING6 = 'T',
     URL      = 'U',  // markdown link destinations and bare URLs
-    QUOTE    = 'V'   // markdown block quote text
+    QUOTE    = 'V',  // markdown block quote text
+    OPERATOR = 'W'   // + - * / = < > ! & | ^ ~ ? in the C-like and scripting languages
 };
 // Type names share the yellow style with variables.
 static const char TYPENAME = VARIABLE;
 
-static const int STYLE_COUNT = 22;
+static const int STYLE_COUNT = 23;
 
 // Private-use characters (FontAwesome, Nerd Fonts, ...) get the "icon twin" of
 // their style: style + ICON_STYLE_OFFSET. The editor draws those twins with an
 // icon font in the same colour, because FLTK has no per-glyph font fallback.
-static const int ICON_STYLE_OFFSET = 22;
-static const int TOTAL_STYLE_COUNT = 44;
+static const int ICON_STYLE_OFFSET = 23;
+static const int TOTAL_STYLE_COUNT = 46;
 
 // Above this size highlighting is skipped to keep typing responsive.
 static const size_t MAX_HIGHLIGHT_BYTES = 3u * 1024u * 1024u;

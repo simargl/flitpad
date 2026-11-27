@@ -68,6 +68,8 @@ int Settings::get_int(const std::string& key, int fallback, int lo, int hi) cons
     return static_cast<int>(v);
 }
 
+bool Settings::has(const std::string& key) const { return values_.find(key) != values_.end(); }
+
 void Settings::set(const std::string& key, const std::string& value) { values_[key] = value; }
 
 void Settings::set_int(const std::string& key, int value) { values_[key] = std::to_string(value); }

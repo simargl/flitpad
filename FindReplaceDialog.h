@@ -32,6 +32,9 @@ public:
     void set_query(const std::string& query);
     void focus_query();
 
+    // Re-colour every widget from the current Theme (also called by the constructor).
+    void apply_theme();
+
     void do_find_next();
     void do_find_prev();
     void do_replace();

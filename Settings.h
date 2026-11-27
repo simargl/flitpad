@@ -17,7 +17,9 @@ public:
     // Integer value clamped to [lo, hi]; `fallback` if missing or not a number.
     int get_int(const std::string& key, int fallback, int lo, int hi) const;
 
+    bool has(const std::string& key) const;
     void set(const std::string& key, const std::string& value);
+    const std::map<std::string, std::string>& all() const { return values_; }
     void set_int(const std::string& key, int value);
 
 private:

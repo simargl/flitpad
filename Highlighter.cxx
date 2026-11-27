@@ -400,7 +400,7 @@ std::string highlight_generic(const LangDef& d, const std::string& t) {
             continue;
         }
 
-        if (d.operators && std::strchr("+-*/%=<>!&|^~?", c)) paint(st, i, i + 1, SPECIAL);
+        if (d.operators && std::strchr("+-*/%=<>!&|^~?", c)) paint(st, i, i + 1, OPERATOR);
         ++i;
     }
     return st;

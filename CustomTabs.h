@@ -9,9 +9,11 @@
 //  * clicking anywhere on the tab bar (even on the already active tab) fires the
 //    callback, so the editor gets keyboard focus back
 //  * middle-click on a tab asks the owner to close it
+//  * right-click on a tab asks the owner to show its context menu
 class CustomTabs : public Fl_Tabs {
 public:
     std::function<void(Fl_Widget*)> on_middle_click;
+    std::function<void(Fl_Widget*)> on_right_click;
 
     CustomTabs(int x, int y, int w, int h, const char* l = 0) : Fl_Tabs(x, y, w, h, l) {}
 
@@ -20,6 +22,13 @@ public:
             Fl_Widget* tab = which(Fl::event_x(), Fl::event_y());
             if (tab && on_middle_click) {
                 on_middle_click(tab);
+                return 1;
+            }
+        }
+        if (event == FL_PUSH && Fl::event_button() == FL_RIGHT_MOUSE && in_tab_bar()) {
+            Fl_Widget* tab = which(Fl::event_x(), Fl::event_y());
+            if (tab && on_right_click) {
+                on_right_click(tab);   // the owner defers anything that deletes tabs
                 return 1;
             }
         }

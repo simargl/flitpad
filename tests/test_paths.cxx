@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <set>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <unistd.h>
@@ -53,6 +55,38 @@ int main() {
     CHECK(!PathUtil::is_symlink(want));
     CHECK(!PathUtil::is_symlink(root + "/missing"));
     CHECK(!PathUtil::is_symlink(root + "/link/a.txt"));   // only the last component counts
+
+    // unique_name: how new / untitled files avoid existing names
+    {
+        std::set<std::string> used;
+        std::function<bool(const std::string&)> taken = [&used](const std::string& n) { return used.count(n) != 0; };
+        CHECK(PathUtil::unique_name("untitled", taken) == "untitled");
+        used.insert("untitled");
+        CHECK(PathUtil::unique_name("untitled", taken) == "untitled_1");
+        used.insert("untitled_1");
+        CHECK(PathUtil::unique_name("untitled", taken) == "untitled_2");
+        CHECK(PathUtil::unique_name("untitled_1", taken) == "untitled_2");     // numbers don't pile up
+        used.insert("untitled_3");
+        CHECK(PathUtil::unique_name("untitled_3", taken) == "untitled_2");     // fills the first gap
+        used.insert("untitled_2");
+        CHECK(PathUtil::unique_name("untitled_3", taken) == "untitled_4");
+        used.clear();
+        used.insert("notes.txt");
+        CHECK(PathUtil::unique_name("notes.txt", taken) == "notes_1.txt");     // extension stays last
+        used.insert("notes_1.txt");
+        CHECK(PathUtil::unique_name("notes_1.txt", taken) == "notes_2.txt");
+        used.clear();
+        used.insert(".hidden");
+        CHECK(PathUtil::unique_name(".hidden", taken) == ".hidden_1");
+        used.clear();
+        used.insert("a.tar.gz");
+        CHECK(PathUtil::unique_name("a.tar.gz", taken) == "a.tar_1.gz");
+        used.clear();
+        used.insert("v2");
+        CHECK(PathUtil::unique_name("v2", taken) == "v2_1");                   // no '_' before the digits: kept
+        std::function<bool(const std::string&)> everything = [](const std::string&) { return true; };
+        CHECK(PathUtil::unique_name("x", everything) == "x");                  // gives up instead of looping forever
+    }
 
     std::string cmd = "rm -rf '" + root + "'";
     if (std::system(cmd.c_str()) != 0) std::cerr << "cleanup failed\n";

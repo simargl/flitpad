@@ -85,15 +85,6 @@ void shift_selection(RegionEdit& r, const Span& sp, bool has_sel, int shift) {
 
 }  // namespace
 
-std::string change_case(const std::string& text, bool upper) {
-    std::string out = text;
-    for (size_t i = 0; i < out.size(); ++i) {
-        unsigned char c = static_cast<unsigned char>(out[i]);
-        if (c < 0x80) out[i] = static_cast<char>(upper ? std::toupper(c) : std::tolower(c));
-    }
-    return out;
-}
-
 RegionEdit duplicate_lines(const std::string& doc, int s, int e, int cursor, bool has_sel) {
     RegionEdit r;
     Span sp = line_span(doc, s, e, cursor, has_sel);

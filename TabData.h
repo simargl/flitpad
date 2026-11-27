@@ -19,11 +19,12 @@ struct TabData {
     bool is_untitled;         // created with Ctrl+N and never saved: Save asks for a name
     bool crlf;                // file used CRLF line endings; preserved on save
     bool restyle_pending;     // a debounced re-highlight is scheduled
+    long long mtime;          // file modification time when we last read or wrote it
     Fl_Tabs* tabs;
 
     TabData()
         : group(0), editor(0), buffer(0), style_buffer(0), language("Plain Text"),
-          is_modified(false), is_untitled(false), crlf(false), restyle_pending(false), tabs(0) {}
+          is_modified(false), is_untitled(false), crlf(false), restyle_pending(false), mtime(0), tabs(0) {}
 };
 
 #endif

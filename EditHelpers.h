@@ -33,9 +33,6 @@ std::string outdent_lines(const std::string& block, int width);
 bool toggle_line_comments(const std::string& language, const std::string& block,
                           std::string& out, bool* all_commented = 0);
 
-// ASCII-only case conversion (UTF-8 multi-byte characters are left untouched).
-std::string change_case(const std::string& text, bool upper);
-
 // A single replacement of doc[start, end) by `text`, plus where the caret and
 // the selection (sel_start < 0: none) end up afterwards. valid == false: nothing to do.
 struct RegionEdit {

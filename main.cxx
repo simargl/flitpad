@@ -14,7 +14,7 @@
 #endif
 
 #include "TextEditorApp.h"
-#include "Theme.h"
+#include "NativeTheme.h"
 
 bool is_process_running(int pid) {
     if (pid <= 0) return false;
@@ -81,13 +81,14 @@ int main(int argc, char** argv) {
         lock_out.close();
     }
 
-    Theme::apply();
+    Fl::scheme("gtk+");   // colours come from the colour scheme: see TextEditorApp::apply_theme()
 
     TextEditorApp window(1200, 800, "FlitPad");
 
     window.load_session();
 
     window.show(argc, argv);
+    NativeTheme::apply(&window);   // Windows: dark title bar if the system is set to dark mode
 
     for (int i = 1; i < argc; ++i) {
         if (argv[i][0] != '-') {

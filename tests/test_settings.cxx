@@ -73,18 +73,30 @@ int main() {
         const unsigned bg = 0x002b36;
         const unsigned accents[] = {0xcb4b16, 0xdc322f, 0xd33682, 0x6c71c4, 0x268bd2, 0x2aa198, 0x859900, 0xb58900, 0x586e75, 0x93a1a1, 0xeee8d5};
         for (size_t i = 0; i < sizeof(accents) / sizeof(*accents); ++i) {
-            unsigned c = ColorMath::lifted(accents[i], bg);
+            unsigned c = ColorMath::ensure_contrast(accents[i], bg);
             CHECK(ColorMath::luminance(c) - ColorMath::luminance(bg) > 105);     // clears FLTK's ~99 threshold
-            CHECK(ColorMath::lifted(c, bg) == c);                                // idempotent
+            CHECK(ColorMath::ensure_contrast(c, bg) == c);                                // idempotent
             // hue is kept: no channel gets darker, and the ordering of the channels is not inverted
             for (int sh = 0; sh <= 16; sh += 8) CHECK(((c >> sh) & 255) >= ((accents[i] >> sh) & 255));
         }
-        CHECK(ColorMath::lifted(0x93a1a1, bg) == 0x93a1a1);                       // already bright: untouched
-        CHECK(ColorMath::lifted(0xeee8d5, bg) == 0xeee8d5);
-        CHECK(ColorMath::lifted(0x000000, 0x000000, 300) == 0x000000);            // impossible target: unchanged
-        unsigned o = ColorMath::lifted(0xcb4b16, bg);                              // orange stays orange
+        CHECK(ColorMath::ensure_contrast(0x93a1a1, bg) == 0x93a1a1);                       // already bright: untouched
+        CHECK(ColorMath::ensure_contrast(0xeee8d5, bg) == 0xeee8d5);
+        CHECK(ColorMath::ensure_contrast(0x000000, 0x000000, 300) == 0x000000);            // impossible target: unchanged
+        // light backgrounds: colours are darkened instead
+        const unsigned light = 0xfdf6e3;
+        const unsigned onlight[] = {0x93a1a1, 0xb58900, 0xeab700, 0x2aa198, 0xf5871f, 0x859900, 0xffffff, 0xdddddd};
+        for (size_t i = 0; i < sizeof(onlight) / sizeof(*onlight); ++i) {
+            unsigned c = ColorMath::ensure_contrast(onlight[i], light);
+            CHECK(ColorMath::luminance(light) - ColorMath::luminance(c) > 105);
+            CHECK(ColorMath::ensure_contrast(c, light) == c);
+            for (int sh = 0; sh <= 16; sh += 8) CHECK(((c >> sh) & 255) <= ((onlight[i] >> sh) & 255));   // only darker
+        }
+        CHECK(ColorMath::ensure_contrast(0x657b83, light) == 0x657b83);                    // already dark enough
+        CHECK(ColorMath::blend(0x000000, 0xffffff, 0.5) == 0x808080);
+        CHECK(ColorMath::blend(0x123456, 0xabcdef, 0.0) == 0x123456 && ColorMath::blend(0x123456, 0xabcdef, 1.0) == 0xabcdef);
+        unsigned o = ColorMath::ensure_contrast(0xcb4b16, bg);                              // orange stays orange
         CHECK(((o >> 16) & 255) > ((o >> 8) & 255) && ((o >> 8) & 255) > (o & 255));
-        unsigned b = ColorMath::lifted(0x268bd2, bg);                              // blue stays blue
+        unsigned b = ColorMath::ensure_contrast(0x268bd2, bg);                              // blue stays blue
         CHECK((b & 255) > ((b >> 8) & 255) && ((b >> 8) & 255) > ((b >> 16) & 255));
     }
 

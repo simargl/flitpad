@@ -7,7 +7,7 @@ ALL_CXXFLAGS = -std=c++11 -Wall -Wextra -MMD -MP $(CXXFLAGS) $(shell fltk-config
 LDFLAGS_FLTK = $(shell fltk-config --use-images --ldflags)
 
 TARGET = flitpad
-SRCS   = main.cxx TextEditorApp.cxx FindReplaceDialog.cxx Highlighter.cxx EditHelpers.cxx PathUtil.cxx Settings.cxx IconFont.cxx
+SRCS   = main.cxx TextEditorApp.cxx FindReplaceDialog.cxx Highlighter.cxx EditHelpers.cxx PathUtil.cxx Settings.cxx IconFont.cxx ColorSchemes.cxx SessionFile.cxx TextFile.cxx SchemeDialog.cxx NativeTheme.cxx
 OBJS   = $(SRCS:.cxx=.o)
 
 all: $(TARGET)
@@ -19,10 +19,13 @@ $(TARGET): $(OBJS)
 	$(CXX) $(ALL_CXXFLAGS) -c $< -o $@
 
 # Highlighter and EditHelpers don't depend on FLTK, so the tests build without it.
-test: tests/test_highlight tests/test_paths tests/test_settings
+test: tests/test_highlight tests/test_paths tests/test_settings tests/test_schemes tests/test_session tests/test_textfile
 	./tests/test_highlight
 	./tests/test_paths
 	./tests/test_settings
+	./tests/test_schemes
+	./tests/test_session
+	./tests/test_textfile
 
 tests/test_highlight: tests/test_highlight.cxx Highlighter.cxx EditHelpers.cxx Highlighter.h EditHelpers.h
 	$(CXX) -std=c++11 -Wall -Wextra $(CXXFLAGS) tests/test_highlight.cxx Highlighter.cxx EditHelpers.cxx -o $@
@@ -33,6 +36,15 @@ tests/test_paths: tests/test_paths.cxx PathUtil.cxx PathUtil.h
 tests/test_settings: tests/test_settings.cxx Settings.cxx IconFont.cxx Settings.h IconFont.h ColorMath.h
 	$(CXX) -std=c++11 -Wall -Wextra $(CXXFLAGS) tests/test_settings.cxx Settings.cxx IconFont.cxx -o $@
 
+tests/test_schemes: tests/test_schemes.cxx ColorSchemes.cxx Highlighter.cxx ColorSchemes.h ColorMath.h Highlighter.h
+	$(CXX) -std=c++11 -Wall -Wextra $(CXXFLAGS) tests/test_schemes.cxx ColorSchemes.cxx Highlighter.cxx -o $@
+
+tests/test_session: tests/test_session.cxx SessionFile.cxx Settings.cxx SessionFile.h Settings.h
+	$(CXX) -std=c++11 -Wall -Wextra $(CXXFLAGS) tests/test_session.cxx SessionFile.cxx Settings.cxx -o $@
+
+tests/test_textfile: tests/test_textfile.cxx TextFile.cxx PathUtil.cxx TextFile.h PathUtil.h
+	$(CXX) -std=c++11 -Wall -Wextra $(CXXFLAGS) tests/test_textfile.cxx TextFile.cxx PathUtil.cxx -o $@
+
 # ./tests/show_styles <Language> <file> [--runs]  -- prints the highlighter's output
 tests/show_styles: tests/show_styles.cxx Highlighter.cxx Highlighter.h
 	$(CXX) -std=c++11 -Wall -Wextra $(CXXFLAGS) tests/show_styles.cxx Highlighter.cxx -o $@
@@ -42,7 +54,7 @@ install: $(TARGET)
 	install -Dm644 flitpad.png $(DESTDIR)$(PREFIX)/share/icons/hicolor/64x64/apps/flitpad.png
 
 clean:
-	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) tests/test_highlight tests/test_paths tests/test_settings tests/show_styles
+	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) tests/test_highlight tests/test_paths tests/test_settings tests/test_schemes tests/test_session tests/test_textfile tests/show_styles
 
 appimage: all
 	rm -rf AppDir

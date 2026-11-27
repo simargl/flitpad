@@ -6,13 +6,16 @@
 #include "PathUtil.h"
 #include "Theme.h"
 #include "CodeEditor.h"
+#include "TabSwitcher.h"
 #include "IconFont.h"
+#include "TextFile.h"
+#include "SchemeDialog.h"
+#include "NativeTheme.h"
 #include <FL/filename.H>
 #include <FL/fl_ask.H>
 #include <FL/Fl_RGB_Image.H>
 #include <FL/Fl_Native_File_Chooser.H>
 #include <FL/Fl_Menu_Item.H>
-#include <ctime>
 #include <cstdint>
 #include <fstream>
 #include <sstream>
@@ -25,18 +28,19 @@
 static_assert(TextEditorApp::STYLE_COUNT == Highlighter::TOTAL_STYLE_COUNT, "style table size mismatch");
 
 static const int DEFAULT_FONT_SIZE = 17;
+static const char* const DEFAULT_FONT_NAME = "Courier";
 static const int MIN_FONT_SIZE = 9;
 static const int MAX_FONT_SIZE = 40;
 static const int TAB_WIDTH = 4;
 
 // context-menu / shortcut commands
 enum MenuCommand {
-    CMD_UNDO = 1, CMD_CUT, CMD_COPY, CMD_PASTE, CMD_DELETE, CMD_SELECT_ALL,
-    CMD_INSERT_DATE, CMD_INSERT_TIME, CMD_INSERT_DATETIME,
-    CMD_COMMENT, CMD_INDENT, CMD_OUTDENT, CMD_UPPER, CMD_LOWER,
-    CMD_DUPLICATE_LINE, CMD_DELETE_LINE, CMD_LINE_UP, CMD_LINE_DOWN,
-    CMD_FIND_WORD, CMD_GOTO_LINE
+    CMD_UNDO = 1, CMD_CUT, CMD_COPY, CMD_PASTE, CMD_SELECT_ALL, CMD_COMMENT,
+    CMD_DUPLICATE_LINE, CMD_DELETE_LINE, CMD_LINE_UP, CMD_LINE_DOWN, CMD_THEME
 };
+
+enum SidebarCommand { SB_NEW_FILE = 1, SB_RENAME, SB_DELETE, SB_COPY_PATH, SB_REFRESH };
+enum TabCommand { TAB_CLOSE = 1, TAB_CLOSE_OTHERS, TAB_CLOSE_ALL, TAB_COPY_PATH };
 
 // 16x16 XPM Icon for Folders (Gold/Yellow)
 static const char* folder_xpm[] = {
@@ -96,6 +100,21 @@ CustomFileBrowser::~CustomFileBrowser() {
 }
 
 int CustomFileBrowser::handle(int event) {
+    if (event == FL_DND_ENTER || event == FL_DND_DRAG || event == FL_DND_RELEASE || event == FL_DND_LEAVE) return 1;
+    if (event == FL_PASTE && Fl::event_text() &&
+        app_->open_dropped(std::string(Fl::event_text(), static_cast<size_t>(Fl::event_length()))))
+        return 1;
+    if (event == FL_PUSH && Fl::event_button() == FL_RIGHT_MOUSE) {
+        // Let the browser select the item under the mouse, but without running our
+        // callback (which would open the file); then show the context menu.
+        const uchar saved = when();
+        when(FL_WHEN_NEVER);
+        Fl_Browser::handle(event);
+        when(saved);
+        take_focus();
+        app_->show_sidebar_menu();
+        return 1;
+    }
     if (event == FL_KEYBOARD) {
         int key = Fl::event_key();
         if (value() > 0) {
@@ -112,52 +131,9 @@ int CustomFileBrowser::handle(int event) {
     return Fl_Browser::handle(event);
 }
 
-// GtkSourceView "solarized-dark" palette. Letters match Highlighter::Style.
-// Theme::syntax() lifts colours that FLTK would otherwise draw white (see
-// ColorMath.h). Entries 22..43 are the "icon twins" of 0..21 (same colour, drawn
-// with the icon font); the constructor fills them in and resolve_icon_font()
-// gives them the real font.
-#define SYN(c) Theme::syntax(Theme::c)
-Fl_Text_Editor::Style_Table_Entry TextEditorApp::style_table_[TextEditorApp::STYLE_COUNT] = {
-    { SYN(BASE1),   FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // A plain text
-    { SYN(ORANGE),  FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // B keywords (def:statement)
-    { Theme::rgb(ColorMath::lifted(Theme::BASE01, Theme::BASE03, 108)),
-                    FL_COURIER_ITALIC, DEFAULT_FONT_SIZE, 0 }, // C comments, ~~strike~~ (base01, italic)
-    { SYN(CYAN),    FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // D strings
-    { SYN(MAGENTA), FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // E numbers, true/null/None
-    { SYN(BLUE),    FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // F functions, keys (def:identifier)
-    { SYN(YELLOW),  FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // G types, variables (def:type)
-    { SYN(ORANGE),  FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // H markdown heading 1
-    { SYN(MAGENTA), FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // I markdown bold
-    { SYN(GREEN),   FL_COURIER_ITALIC, DEFAULT_FONT_SIZE, 0 }, // J markdown italic
-    { SYN(YELLOW),  FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // K markdown code
-    { SYN(BLUE),    FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // L markdown link text
-    { SYN(RED),     FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // M markdown markers (bullets, >, |, ```)
-    { SYN(VIOLET),  FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // N preprocessor, decorators (def:preprocessor)
-    { SYN(GREEN),   FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // O escapes, operators (def:special-char, def:operator)
-    { SYN(YELLOW),  FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // P markdown heading 2
-    { SYN(GREEN),   FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // Q markdown heading 3
-    { SYN(CYAN),    FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // R markdown heading 4
-    { SYN(BLUE),    FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // S markdown heading 5
-    { SYN(VIOLET),  FL_COURIER_BOLD,   DEFAULT_FONT_SIZE, 0 }, // T markdown heading 6
-    { SYN(CYAN),    FL_COURIER,        DEFAULT_FONT_SIZE, 0 }, // U markdown link destinations, URLs
-    { SYN(VIOLET),  FL_COURIER,        DEFAULT_FONT_SIZE, 0 }  // V markdown block quotes
-};
-#undef SYN
-
-static std::string url_decode(const std::string& s) {
-    std::string out;
-    for (size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == '%' && i + 2 < s.size() && std::isxdigit(static_cast<unsigned char>(s[i + 1])) &&
-            std::isxdigit(static_cast<unsigned char>(s[i + 2]))) {
-            out += static_cast<char>(std::strtol(s.substr(i + 1, 2).c_str(), 0, 16));
-            i += 2;
-        } else {
-            out += s[i];
-        }
-    }
-    return out;
-}
+// Letters match Highlighter::Style; entries 23..45 are the "icon twins" of 0..22.
+// The contents come from the active colour scheme (rebuild_style_table()).
+Fl_Text_Editor::Style_Table_Entry TextEditorApp::style_table_[TextEditorApp::STYLE_COUNT];
 
 static std::string home_file(const char* name) {
     const char* home = getenv("HOME");
@@ -186,7 +162,7 @@ static std::string buffer_range(Fl_Text_Buffer* buf, int a, int b) {
 std::string TextEditorApp::get_absolute_path(const std::string& path) {
     std::string cleaned = path;
     if (cleaned.rfind("file://", 0) == 0) {
-        cleaned = url_decode(cleaned.substr(7));
+        cleaned = PathUtil::url_decode(cleaned.substr(7));
         if (cleaned.rfind("localhost", 0) == 0) cleaned = cleaned.substr(9);
     }
 
@@ -230,10 +206,6 @@ void TextEditorApp::poll_commands_cb(void* data) {
         }
     }
     Fl::repeat_timeout(0.5, poll_commands_cb, data);
-}
-
-std::string TextEditorApp::get_language_name(const std::string& path, const std::string& content) {
-    return Highlighter::detect_language(path, content);
 }
 
 // ---------------------------------------------------------------------------
@@ -309,10 +281,8 @@ void TextEditorApp::buffer_modified_cb(int, int n_inserted, int n_deleted, int, 
     TabData* tab = static_cast<TabData*>(cb_arg);
     if (!tab->is_modified) {
         tab->is_modified = true;
-        std::string label = tab->filename + " *";
-        tab->group->copy_label(label.c_str());
-        tab->group->redraw();
-        if (tab->tabs) tab->tabs->redraw();
+        TextEditorApp* app = tab->tabs ? static_cast<TextEditorApp*>(tab->tabs->top_window()) : nullptr;
+        if (app) app->update_tab_label(tab);
     }
 }
 
@@ -322,6 +292,17 @@ void TextEditorApp::update_tab_label(TabData* tab) {
     tab->group->copy_label(label.c_str());
     tab->group->redraw();
     if (tab->tabs) tab->tabs->redraw();
+    update_window_title();   // the title shows the same "*"; saving by keyboard never reaches update_status_bar()
+}
+
+// "name * - FlitPad" for the current tab. Only touches the window when the text changes.
+void TextEditorApp::update_window_title() {
+    TabData* tab = get_current_tab();
+    const std::string title = tab ? tab->filename + (tab->is_modified ? " *" : "") + " - FlitPad" : std::string("FlitPad");
+    if (title != window_title_) {
+        window_title_ = title;
+        copy_label(title.c_str());
+    }
 }
 
 void TextEditorApp::set_status_message(const std::string& message) {
@@ -331,6 +312,7 @@ void TextEditorApp::set_status_message(const std::string& message) {
 
 void TextEditorApp::update_status_bar() {
     TabData* tab = get_current_tab();
+    update_window_title();   // also follows tab switches
     if (!tab) {
         status_bar_->copy_label(" No file open  |  UTF-8");
         return;
@@ -369,6 +351,7 @@ void TextEditorApp::tabs_cb(Fl_Widget* w, void* data) {
         }
     }
     self->update_status_bar();
+    self->check_external_change(self->get_current_tab());
 }
 
 // ---------------------------------------------------------------------------
@@ -543,19 +526,23 @@ void TextEditorApp::window_close_cb(Fl_Widget*, void* data) {
 
 TextEditorApp::TextEditorApp(int width, int height, const char* title)
     : Fl_Double_Window(width, height, title), font_size_(DEFAULT_FONT_SIZE),
-      find_dialog_(nullptr), replace_dialog_(nullptr), icon_font_resolved_(false) {
+      find_dialog_(nullptr), replace_dialog_(nullptr), icon_font_resolved_(false),
+      font_regular_(FL_COURIER), font_bold_(FL_COURIER_BOLD), font_italic_(FL_COURIER_ITALIC),
+      font_bold_italic_(FL_COURIER_BOLD_ITALIC), icon_font_(-1), dark_theme_(true), switcher_(nullptr),
+      fonts_listed_(false), checking_changes_(false) {
 
-    // saved font size and optional icon font override
-    settings_.load(home_file(".flitpad_config"));
-    font_size_ = settings_.get_int("font_size", DEFAULT_FONT_SIZE, MIN_FONT_SIZE, MAX_FONT_SIZE);
-    icon_font_name_ = settings_.get("icon_font");
-    for (int i = 0; i < STYLE_COUNT; ++i) {
-        if (i >= Highlighter::ICON_STYLE_OFFSET) {
-            style_table_[i] = style_table_[i - Highlighter::ICON_STYLE_OFFSET];
-            style_table_[i].font = FL_COURIER;
-        }
-        style_table_[i].size = font_size_;
-    }
+    // Everything Flitpad remembers is in one file: [settings] and [recent].
+    session_.load(get_session_file_path());
+    session_.import_legacy_settings(home_file(".flitpad_config"));
+    const Settings& st = session_.settings;
+    font_size_ = st.get_int("font_size", DEFAULT_FONT_SIZE, MIN_FONT_SIZE, MAX_FONT_SIZE);
+    font_name_ = st.get("font_name", DEFAULT_FONT_NAME);
+    icon_font_name_ = st.get("icon_font");
+    dark_theme_ = st.get("theme", "dark") != "light";
+    Theme::set_scheme(active_scheme());
+    Theme::apply();
+    const bool font_found = resolve_font(font_name_);
+    rebuild_style_table();
 
     Fl_Color bg_color = Theme::window_bg();
     Fl_Color panel_color = Theme::panel_bg();
@@ -578,6 +565,7 @@ TextEditorApp::TextEditorApp(int width, int height, const char* title)
 
     CustomTabs* ctabs = new CustomTabs(240, 10, width - 250, height - 55);
     ctabs->on_middle_click = [this](Fl_Widget* group) { schedule_close(group); };
+    ctabs->on_right_click = [this](Fl_Widget* group) { show_tab_menu(group); };
     tabs_ = ctabs;
     tabs_->box(FL_THIN_UP_BOX);
     tabs_->color(bg_color);
@@ -592,10 +580,14 @@ TextEditorApp::TextEditorApp(int width, int height, const char* title)
     status_bar_->labelcolor(text_color);
     status_bar_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
 
+    switcher_ = new TabSwitcher();   // last child, so it is drawn on top
+
     end();
     resizable(tabs_);
 
     Fl::add_timeout(0.5, poll_commands_cb, this);
+    Fl::add_timeout(1.0, external_change_cb, this);
+    if (!font_found) set_status_message("Font \"" + font_name_ + "\" not found, using " + DEFAULT_FONT_NAME);
 
     int icon_w = 32, icon_h = 32;
     uchar* icon_pixels = new uchar[icon_w * icon_h * 4];
@@ -635,9 +627,8 @@ TextEditorApp::TextEditorApp(int width, int height, const char* title)
 
 TextEditorApp::~TextEditorApp() {
     Fl::remove_timeout(poll_commands_cb, this);
+    Fl::remove_timeout(external_change_cb, this);
     for (size_t i = 0; i < open_tabs_.size(); ++i) Fl::remove_timeout(restyle_timeout_cb, open_tabs_[i]);
-    settings_.set_int("font_size", font_size_);
-    settings_.save(home_file(".flitpad_config"));
     save_session();
     std::remove(get_lock_file_path().c_str());
     std::remove(get_command_file_path().c_str());
@@ -648,51 +639,40 @@ TextEditorApp::~TextEditorApp() {
 // ---------------------------------------------------------------------------
 
 void TextEditorApp::save_session() {
-    std::ofstream file(get_session_file_path().c_str());
-    if (!file.is_open()) return;
-    file << x() << " " << y() << " " << w() << " " << h() << "\n";
+    Settings& st = session_.settings;
+    st.set_int("font_size", font_size_);
+    st.set("font_name", font_name_);
+    st.set("theme", dark_theme_ ? "dark" : "light");
+    if (!st.has("dark_scheme")) st.set("dark_scheme", ColorSchemes::fallback(true)->id);     // visible in the file, easy to edit
+    if (!st.has("light_scheme")) st.set("light_scheme", ColorSchemes::fallback(false)->id);
+    session_.set_window(x(), y(), w(), h());
 
     TabData* current = get_current_tab();
-    file << ((current && !current->is_untitled) ? current->filepath : std::string()) << "\n";
-    for (size_t i = 0; i < open_tabs_.size(); ++i) {
-        if (!open_tabs_[i]->is_untitled && !open_tabs_[i]->filepath.empty()) file << open_tabs_[i]->filepath << "\n";
-    }
+    st.set("active_file", (current && !current->is_untitled) ? current->filepath : std::string());
+    session_.recent_files.clear();
+    for (size_t i = 0; i < open_tabs_.size(); ++i)
+        if (!open_tabs_[i]->is_untitled && !open_tabs_[i]->filepath.empty()) session_.recent_files.push_back(open_tabs_[i]->filepath);
+
+    if (session_.save(get_session_file_path())) std::remove(home_file(".flitpad_config").c_str());   // folded into [settings]
 }
 
 void TextEditorApp::load_session() {
-    std::ifstream file(get_session_file_path().c_str());
-    if (!file.is_open()) return;
-
     int wx, wy, ww, wh;
-    if (file >> wx >> wy >> ww >> wh) {
-        if (ww > 200 && wh > 200) resize(wx, wy, ww, wh);
-    }
+    if (session_.get_window(wx, wy, ww, wh)) resize(wx, wy, ww, wh);
 
-    std::string dummy;
-    std::getline(file, dummy);
-
-    std::string active_path, line;
-    std::vector<std::string> session_paths;
-    if (std::getline(file, active_path)) {
-        if (!active_path.empty() && active_path.back() == '\r') active_path.pop_back();
-        while (std::getline(file, line)) {
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            if (!line.empty()) session_paths.push_back(canonical_path(line));
-        }
-    }
-    file.close();
-
-    active_path = active_path.empty() ? "" : canonical_path(active_path);
+    std::string active_path = session_.settings.get("active_file");
+    if (!active_path.empty()) active_path = canonical_path(active_path);
     std::vector<std::string> restored;
 
-    for (size_t i = 0; i < session_paths.size(); ++i) {
-        std::ifstream check(session_paths[i].c_str(), std::ios::binary);
-        if (!check.is_open()) continue;
+    for (size_t i = 0; i < session_.recent_files.size(); ++i) {
+        const std::string id = canonical_path(session_.recent_files[i]);
+        std::ifstream check(id.c_str(), std::ios::binary);
+        if (!check.is_open()) continue;     // deleted or moved since last time
         check.close();
 
-        open_file(session_paths[i], false);
+        open_file(id, false);
         for (size_t k = 0; k < open_tabs_.size(); ++k) {
-            if (open_tabs_[k]->filepath == session_paths[i]) { restored.push_back(session_paths[i]); break; }
+            if (open_tabs_[k]->filepath == id) { restored.push_back(id); break; }
         }
     }
 
@@ -740,11 +720,10 @@ TabData* TextEditorApp::tab_for_editor(Fl_Text_Editor* editor) {
     return nullptr;
 }
 
-void TextEditorApp::select_tab(size_t index) {
-    if (index >= open_tabs_.size()) return;
-    tabs_->value(open_tabs_[index]->group);
-    tabs_->set_changed();
-    tabs_->do_callback();
+TabData* TextEditorApp::tab_for_group(Fl_Widget* group) {
+    for (size_t i = 0; i < open_tabs_.size(); ++i)
+        if (open_tabs_[i]->group == group) return open_tabs_[i];
+    return nullptr;
 }
 
 void TextEditorApp::configure_editor(TabData* tab) {
@@ -786,13 +765,14 @@ TabData* TextEditorApp::create_tab(const std::string& path, const std::string& n
 
     editor->color(editor_bg);
     editor->textcolor(editor_text);
-    editor->textfont(FL_COURIER);
+    editor->textfont(font_regular_);
     editor->textsize(font_size_);
     editor->cursor_color(cursor_color);
     editor->cursor_style(Fl_Text_Editor::NORMAL_CURSOR);
     editor->show_cursor();
     editor->selection_color(select_color);
 
+    static_cast<CodeEditor*>(editor)->on_drop = [this](const std::string& dropped) { return open_dropped(dropped); };
     editor->add_key_binding(FL_Enter, FL_TEXT_EDITOR_ANY_STATE, kf_smart_enter);
     editor->add_key_binding(FL_KP_Enter, FL_TEXT_EDITOR_ANY_STATE, kf_smart_enter);
     editor->add_key_binding(FL_Tab, 0, kf_tab);
@@ -909,17 +889,20 @@ void TextEditorApp::try_quit() {
 // open / save
 // ---------------------------------------------------------------------------
 
+// A path is "in use" if another open tab has it or a file of that name exists.
+bool TextEditorApp::path_in_use(const std::string& path, const TabData* ignore) {
+    const std::string id = canonical_path(path);
+    for (size_t i = 0; i < open_tabs_.size(); ++i)
+        if (open_tabs_[i] != ignore && open_tabs_[i]->filepath == id) return true;
+    std::FILE* f = std::fopen(id.c_str(), "rb");
+    if (f) { std::fclose(f); return true; }
+    return false;
+}
+
 void TextEditorApp::new_file() {
-    std::string name = "untitled";
-    int counter = 0;
-    for (;;) {
-        std::string candidate = canonical_path(join_path(current_dir_, name));
-        bool taken = false;
-        for (size_t i = 0; i < open_tabs_.size(); ++i)
-            if (open_tabs_[i]->filepath == candidate) { taken = true; break; }
-        if (!taken) break;
-        name = "untitled_" + std::to_string(++counter);
-    }
+    const std::string name = PathUtil::unique_name("untitled", [this](const std::string& n) {
+        return path_in_use(join_path(current_dir_, n), nullptr);
+    });
     TabData* tab = create_tab(canonical_path(join_path(current_dir_, name)), name, "", true, false);
     tab->editor->take_focus();
     update_status_bar();
@@ -941,28 +924,18 @@ void TextEditorApp::open_file(const std::string& path, bool focus_editor) {
         }
     }
 
-    std::ifstream file(abs_path.c_str(), std::ios::binary);
-    if (!file.is_open()) {
-        fl_alert("Could not open file:\n%s", abs_path.c_str());
+    std::string content, error;
+    bool crlf = false;
+    if (!TextFile::read(abs_path, content, crlf, error)) {
+        fl_alert("%s", error.c_str());
         return;
     }
-    std::stringstream buffer_stream;
-    buffer_stream << file.rdbuf();
-    file.close();
-    std::string content = buffer_stream.str();
-
-    if (content.find('\0') != std::string::npos) {
-        fl_alert("This looks like a binary file, not text:\n%s", abs_path.c_str());
-        return;
-    }
-
-    bool crlf = content.find("\r\n") != std::string::npos;
-    content.erase(std::remove(content.begin(), content.end(), '\r'), content.end());
 
     size_t last_slash = shown_path.find_last_of("/\\");
     std::string fname = (last_slash == std::string::npos) ? shown_path : shown_path.substr(last_slash + 1);
 
     TabData* tab = create_tab(abs_path, fname, content, false, crlf);
+    tab->mtime = TextFile::modified_time(abs_path);
     if (focus_editor) tab->editor->take_focus();
     update_status_bar();
     redraw();
@@ -978,40 +951,47 @@ void TextEditorApp::open_file_dialog() {
 }
 
 bool TextEditorApp::write_tab_to_disk(TabData* tab) {
-    std::string content = buffer_range(tab->buffer, 0, tab->buffer->length());
-    if (!content.empty() && content[content.size() - 1] != '\n') content += '\n';
-
-    if (tab->crlf) {
-        std::string converted;
-        converted.reserve(content.size() + content.size() / 16);
-        for (size_t i = 0; i < content.size(); ++i) {
-            if (content[i] == '\n') converted += '\r';
-            converted += content[i];
-        }
-        content.swap(converted);
-    }
-
-    std::ofstream file(tab->filepath.c_str(), std::ios::binary);
-    if (!file.is_open()) {
-        fl_alert("Error: Could not save file %s", tab->filepath.c_str());
+    std::string error;
+    if (!TextFile::write(tab->filepath, buffer_range(tab->buffer, 0, tab->buffer->length()), tab->crlf, error)) {
+        fl_alert("%s", error.c_str());
         return false;
     }
-    file << content;
-    file.close();
-    if (!file) {
-        fl_alert("Error: Could not save file %s", tab->filepath.c_str());
-        return false;
-    }
+    tab->mtime = TextFile::modified_time(tab->filepath);   // our own write must not look like an outside change
     tab->is_modified = false;
     update_tab_label(tab);
     if (file_browser_) load_directory(current_dir_);
     return true;
 }
 
+// A new file is saved under the name it already has, in the directory it was
+// created in; no dialog (Save As is still there for choosing). Only if that name
+// was taken in the meantime does it get the next free one, so nothing is overwritten.
 bool TextEditorApp::save_tab(TabData* tab) {
     if (!tab) return true;
-    if (tab->is_untitled) return save_tab_as(tab);
-    return write_tab_to_disk(tab);
+    if (!tab->is_untitled) return write_tab_to_disk(tab);
+
+    const size_t slash = tab->filepath.find_last_of("/\\");
+    const std::string dir = (slash == std::string::npos) ? current_dir_ : tab->filepath.substr(0, slash == 0 ? 1 : slash);
+    const std::string wanted = tab->filename;
+    const std::string name = PathUtil::unique_name(wanted, [&](const std::string& n) {
+        return path_in_use(join_path(dir, n), tab);
+    });
+
+    const std::string old_path = tab->filepath, old_name = tab->filename;
+    tab->filename = name;
+    tab->filepath = canonical_path(join_path(dir, name));
+    tab->is_untitled = false;
+    if (!write_tab_to_disk(tab)) {
+        tab->filename = old_name;
+        tab->filepath = old_path;
+        tab->is_untitled = true;
+        update_tab_label(tab);
+        return false;
+    }
+    apply_language(tab);
+    update_status_bar();
+    if (name != wanted) set_status_message("\"" + wanted + "\" already exists, saved as \"" + name + "\"");
+    return true;
 }
 
 bool TextEditorApp::save_tab_as(TabData* tab) {
@@ -1077,6 +1057,7 @@ void TextEditorApp::show_find_dialog() {
     std::string sel = selected_single_line(get_current_tab());
     if (!sel.empty()) find_dialog_->set_query(sel);
     find_dialog_->show();
+    NativeTheme::apply(find_dialog_);
     find_dialog_->focus_query();
 }
 
@@ -1085,6 +1066,7 @@ void TextEditorApp::show_replace_dialog() {
     std::string sel = selected_single_line(get_current_tab());
     if (!sel.empty()) replace_dialog_->set_query(sel);
     replace_dialog_->show();
+    NativeTheme::apply(replace_dialog_);
     replace_dialog_->focus_query();
 }
 
@@ -1261,51 +1243,6 @@ void TextEditorApp::toggle_comment() {
     tab->editor->show_insert_position();
 }
 
-// Applies `f` to the whole lines touched by the selection (or the caret's line).
-static void transform_lines(TabData* tab, bool (*f)(const std::string&, std::string&)) {
-    int a, b;
-    bool has_sel;
-    selection_lines(tab, a, b, has_sel);
-    std::string block = buffer_range(tab->buffer, a, b), out;
-    if (!f(block, out) || out == block) return;
-    int cursor = tab->editor->insert_position();
-    tab->buffer->replace(a, b, out.c_str());
-    if (has_sel) {
-        tab->buffer->select(a, a + static_cast<int>(out.size()));
-        tab->editor->insert_position(a + static_cast<int>(out.size()));
-    } else {
-        int delta = static_cast<int>(out.size()) - static_cast<int>(block.size());
-        tab->editor->insert_position(std::max(a, cursor + delta));
-    }
-    tab->editor->show_insert_position();
-}
-
-static bool indent_block(const std::string& in, std::string& out) { out = EditHelpers::indent_lines(in, TAB_WIDTH); return true; }
-static bool outdent_block(const std::string& in, std::string& out) { out = EditHelpers::outdent_lines(in, TAB_WIDTH); return true; }
-
-static void change_selection_case(TabData* tab, bool upper) {
-    int s = 0, e = 0;
-    if (!tab->buffer->selection_position(&s, &e) || e <= s) return;
-    std::string out = EditHelpers::change_case(buffer_range(tab->buffer, s, e), upper);
-    tab->buffer->replace(s, e, out.c_str());     // same length: ASCII only
-    tab->buffer->select(s, s + static_cast<int>(out.size()));
-    tab->editor->insert_position(s + static_cast<int>(out.size()));
-}
-
-static void insert_at_cursor(TabData* tab, const std::string& text) {
-    Fl_Text_Buffer* buf = tab->buffer;
-    int s = 0, e = 0, pos = tab->editor->insert_position();
-    if (buf->selection_position(&s, &e) && e > s) {
-        buf->unselect();
-        buf->replace(s, e, text.c_str());
-        pos = s;
-    } else {
-        buf->insert(pos, text.c_str());
-    }
-    tab->editor->insert_position(pos + static_cast<int>(text.size()));
-    tab->editor->show_insert_position();
-}
-
 typedef EditHelpers::RegionEdit (*LineCommand)(const std::string&, int, int, int, bool);
 
 static void apply_region_edit(TabData* tab, const EditHelpers::RegionEdit& r) {
@@ -1328,73 +1265,28 @@ static void run_line_command(TabData* tab, LineCommand cmd) {
 static EditHelpers::RegionEdit move_up_cmd(const std::string& d, int s, int e, int c, bool h) { return EditHelpers::move_lines(d, s, e, c, h, true); }
 static EditHelpers::RegionEdit move_down_cmd(const std::string& d, int s, int e, int c, bool h) { return EditHelpers::move_lines(d, s, e, c, h, false); }
 
-// Selected text, or the word under the caret; the caret ends up behind it so that
-// the search finds the *next* occurrence.
-void TextEditorApp::find_word_under_cursor() {
-    TabData* tab = get_current_tab();
-    if (!tab) return;
-    Fl_Text_Buffer* buf = tab->buffer;
-    int s = 0, e = 0;
-    std::string query;
-    if (buf->selection_position(&s, &e) && e > s && e - s <= 200) {
-        query = buffer_range(buf, s, e);
-    } else {
-        int pos = tab->editor->insert_position();
-        s = buf->word_start(pos);
-        e = buf->word_end(pos);
-        if (e > s) query = buffer_range(buf, s, e);
-    }
-    if (query.empty() || query.find('\n') != std::string::npos) {
-        set_status_message("Nothing to search for: select text or put the caret on a word");
-        return;
-    }
-    if (!find_dialog_) find_dialog_ = new FindReplaceDialog(this, false);   // so F3 repeats this search
-    find_dialog_->set_query(query);
-    buf->unselect();
-    tab->editor->insert_position(e);
-    find_text(query, true);
-}
-
 void TextEditorApp::run_menu_command(int command) {
     TabData* tab = get_current_tab();
     if (!tab) return;
-    char text[64];
-    time_t now = std::time(nullptr);
     switch (command) {
-        case CMD_UNDO:       Fl_Text_Editor::kf_undo(0, tab->editor); break;
-        case CMD_CUT:        Fl_Text_Editor::kf_cut(0, tab->editor); break;
-        case CMD_COPY:       Fl_Text_Editor::kf_copy(0, tab->editor); break;
-        case CMD_PASTE:      Fl_Text_Editor::kf_paste(0, tab->editor); break;
-        case CMD_SELECT_ALL: Fl_Text_Editor::kf_select_all(0, tab->editor); break;
-        case CMD_DELETE:
-            if (tab->buffer->selected()) tab->buffer->remove_selection();
-            break;
-        case CMD_INSERT_DATE:
-        case CMD_INSERT_TIME:
-        case CMD_INSERT_DATETIME: {
-            const char* fmt = command == CMD_INSERT_DATE ? "%Y-%m-%d" : command == CMD_INSERT_TIME ? "%H:%M:%S" : "%Y-%m-%d %H:%M:%S";
-            std::strftime(text, sizeof(text), fmt, std::localtime(&now));
-            insert_at_cursor(tab, text);
-            break;
-        }
+        case CMD_UNDO:           Fl_Text_Editor::kf_undo(0, tab->editor); break;
+        case CMD_CUT:            Fl_Text_Editor::kf_cut(0, tab->editor); break;
+        case CMD_COPY:           Fl_Text_Editor::kf_copy(0, tab->editor); break;
+        case CMD_PASTE:          Fl_Text_Editor::kf_paste(0, tab->editor); break;
+        case CMD_SELECT_ALL:     Fl_Text_Editor::kf_select_all(0, tab->editor); break;
         case CMD_COMMENT:        toggle_comment(); break;
-        case CMD_INDENT:         transform_lines(tab, indent_block); break;
-        case CMD_OUTDENT:        transform_lines(tab, outdent_block); break;
-        case CMD_UPPER:          change_selection_case(tab, true); break;
-        case CMD_LOWER:          change_selection_case(tab, false); break;
         case CMD_DUPLICATE_LINE: run_line_command(tab, EditHelpers::duplicate_lines); break;
         case CMD_DELETE_LINE:    run_line_command(tab, EditHelpers::delete_lines); break;
         case CMD_LINE_UP:        run_line_command(tab, move_up_cmd); break;
         case CMD_LINE_DOWN:      run_line_command(tab, move_down_cmd); break;
-        case CMD_FIND_WORD:      find_word_under_cursor(); break;
-        case CMD_GOTO_LINE:      goto_line(); break;
+        case CMD_THEME:          choose_theme(); break;
         default: break;
     }
     tab->editor->take_focus();
     update_status_bar();
 }
 
-// Right-click menu, modelled on Geany's editor popup.
+// Right-click menu: only what an editor really needs. Everything else has a shortcut.
 void TextEditorApp::show_context_menu() {
     TabData* tab = get_current_tab();
     if (!tab) return;
@@ -1402,47 +1294,19 @@ void TextEditorApp::show_context_menu() {
     const int need_sel = tab->buffer->selected() ? 0 : FL_MENU_INACTIVE;
     const int need_comment = Highlighter::line_comment_prefix(tab->language).empty() ? FL_MENU_INACTIVE : 0;
 
-    time_t now = std::time(nullptr);
-    char d[32], t[32], dt[48];
-    std::strftime(d, sizeof(d), "%Y-%m-%d", std::localtime(&now));
-    std::strftime(t, sizeof(t), "%H:%M:%S", std::localtime(&now));
-    std::strftime(dt, sizeof(dt), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
-    const std::string date_label = std::string("Date:  ") + d;
-    const std::string time_label = std::string("Time:  ") + t;
-    const std::string datetime_label = std::string("Date and Time:  ") + dt;
-
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"   // FLTK menu tables list only the first few fields
 #endif
 #define CMD(c) reinterpret_cast<void*>(static_cast<intptr_t>(c))
     Fl_Menu_Item items[] = {
-        { "Undo",       FL_CTRL + 'z', 0, CMD(CMD_UNDO),       FL_MENU_DIVIDER },
-        { "Cut",        FL_CTRL + 'x', 0, CMD(CMD_CUT),        need_sel },
-        { "Copy",       FL_CTRL + 'c', 0, CMD(CMD_COPY),       need_sel },
-        { "Paste",      FL_CTRL + 'v', 0, CMD(CMD_PASTE),      0 },
-        { "Delete",     0,             0, CMD(CMD_DELETE),     need_sel | FL_MENU_DIVIDER },
-        { "Select All", FL_CTRL + 'a', 0, CMD(CMD_SELECT_ALL), FL_MENU_DIVIDER },
-        { "Insert",     0, 0, 0, FL_SUBMENU },
-            { date_label.c_str(),     0, 0, CMD(CMD_INSERT_DATE),     0 },
-            { time_label.c_str(),     0, 0, CMD(CMD_INSERT_TIME),     0 },
-            { datetime_label.c_str(), 0, 0, CMD(CMD_INSERT_DATETIME), 0 },
-            { 0 },
-        { "Format",     0, 0, 0, FL_SUBMENU },
-            { "Toggle Comment",        FL_CTRL + '/', 0, CMD(CMD_COMMENT), need_comment | FL_MENU_DIVIDER },
-            { "Increase Indent",       0, 0, CMD(CMD_INDENT),  0 },
-            { "Decrease Indent",       0, 0, CMD(CMD_OUTDENT), FL_MENU_DIVIDER },
-            { "Convert to Upper Case", 0, 0, CMD(CMD_UPPER),   need_sel },
-            { "Convert to Lower Case", 0, 0, CMD(CMD_LOWER),   need_sel },
-            { 0 },
-        { "Line",       0, 0, 0, FL_SUBMENU | FL_MENU_DIVIDER },
-            { "Duplicate Line",  FL_CTRL + 'd',  0, CMD(CMD_DUPLICATE_LINE), 0 },
-            { "Delete Line",     FL_CTRL + 'k',  0, CMD(CMD_DELETE_LINE),    FL_MENU_DIVIDER },
-            { "Move Line Up",    FL_ALT + FL_Up,   0, CMD(CMD_LINE_UP),      0 },
-            { "Move Line Down",  FL_ALT + FL_Down, 0, CMD(CMD_LINE_DOWN),    0 },
-            { 0 },
-        { "Find Word / Selection", 0,          0, CMD(CMD_FIND_WORD), 0 },
-        { "Go to Line...",         FL_CTRL + 'g', 0, CMD(CMD_GOTO_LINE), 0 },
+        { "Undo",           FL_CTRL + 'z', 0, CMD(CMD_UNDO),       FL_MENU_DIVIDER },
+        { "Cut",            FL_CTRL + 'x', 0, CMD(CMD_CUT),        need_sel },
+        { "Copy",           FL_CTRL + 'c', 0, CMD(CMD_COPY),       need_sel },
+        { "Paste",          FL_CTRL + 'v', 0, CMD(CMD_PASTE),      0 },
+        { "Select All",     FL_CTRL + 'a', 0, CMD(CMD_SELECT_ALL), FL_MENU_DIVIDER },
+        { "Toggle Comment", FL_CTRL + '/', 0, CMD(CMD_COMMENT),    need_comment | FL_MENU_DIVIDER },
+        { "Theme...",       0,             0, CMD(CMD_THEME),      0 },
         { 0 }
     };
 #undef CMD
@@ -1454,44 +1318,393 @@ void TextEditorApp::show_context_menu() {
     if (picked && picked->user_data()) run_menu_command(static_cast<int>(reinterpret_cast<intptr_t>(picked->user_data())));
 }
 
-// FLTK 1.3 draws each style run with one font and has no per-glyph fallback, so
-// private-use characters (FontAwesome & co.) would show as empty boxes in a
-// monospace font. Their style twins use an icon font instead; look for one among
-// the installed fonts. Done lazily, because listing every font is slow-ish.
-void TextEditorApp::resolve_icon_font() {
-    icon_font_resolved_ = true;
+static void copy_to_clipboard(const std::string& text) {
+    Fl::copy(text.c_str(), static_cast<int>(text.size()), 1);
+}
+
+// Sidebar right-click menu. CustomFileBrowser has already selected the item under
+// the mouse (without opening it).
+void TextEditorApp::show_sidebar_menu() {
+    const int line = file_browser_->value();
+    std::string selected;
+    if (line > 0 && file_browser_->text(line)) selected = file_browser_->text(line);
+    const bool has_item = !selected.empty();
+    const bool is_parent = (selected == ".." || selected == "../");
+    const int need_real = (has_item && !is_parent) ? 0 : FL_MENU_INACTIVE;
+
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#endif
+#define CMD(c) reinterpret_cast<void*>(static_cast<intptr_t>(c))
+    Fl_Menu_Item items[] = {
+        { "New File...", 0,         0, CMD(SB_NEW_FILE),  FL_MENU_DIVIDER },
+        { "Rename",      FL_F + 2,  0, CMD(SB_RENAME),    need_real },
+        { "Delete",      FL_Delete, 0, CMD(SB_DELETE),    need_real | FL_MENU_DIVIDER },
+        { "Copy Path",   0,         0, CMD(SB_COPY_PATH), need_real },
+        { "Refresh",     0,         0, CMD(SB_REFRESH),   0 },
+        { 0 }
+    };
+#undef CMD
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+    const Fl_Menu_Item* picked = items->popup(Fl::event_x(), Fl::event_y(), 0, 0, 0);
+    if (!picked || !picked->user_data()) return;
+    switch (static_cast<int>(reinterpret_cast<intptr_t>(picked->user_data()))) {
+        case SB_NEW_FILE:  new_file_in_sidebar(); break;
+        case SB_RENAME:    rename_selected_file(); break;
+        case SB_DELETE:    delete_selected_file(); break;
+        case SB_COPY_PATH: copy_to_clipboard(get_absolute_path(join_path(current_dir_, selected))); break;
+        case SB_REFRESH:   load_directory(current_dir_); break;
+        default: break;
+    }
+}
+
+struct TabAction {
+    TextEditorApp* app;
+    Fl_Widget* group;
+    int command;
+};
+
+// Tab right-click menu. The chosen action runs from the event loop, not from inside
+// Fl_Tabs::handle(), because most of them delete tab widgets.
+void TextEditorApp::show_tab_menu(Fl_Widget* group) {
+    TabData* tab = tab_for_group(group);
+    if (!tab) return;
+    const int need_others = open_tabs_.size() > 1 ? 0 : FL_MENU_INACTIVE;
+
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#endif
+#define CMD(c) reinterpret_cast<void*>(static_cast<intptr_t>(c))
+    Fl_Menu_Item items[] = {
+        { "Close",           FL_CTRL + 'w', 0, CMD(TAB_CLOSE),        0 },
+        { "Close Others",    0,             0, CMD(TAB_CLOSE_OTHERS), need_others },
+        { "Close All",       0,             0, CMD(TAB_CLOSE_ALL),    FL_MENU_DIVIDER },
+        { "Copy Full Path",  0,             0, CMD(TAB_COPY_PATH),    0 },
+        { 0 }
+    };
+#undef CMD
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+    const Fl_Menu_Item* picked = items->popup(Fl::event_x(), Fl::event_y(), 0, 0, 0);
+    if (!picked || !picked->user_data()) return;
+    TabAction* action = new TabAction();
+    action->app = this;
+    action->group = group;
+    action->command = static_cast<int>(reinterpret_cast<intptr_t>(picked->user_data()));
+    Fl::add_timeout(0.0, deferred_tab_action_cb, action);
+}
+
+void TextEditorApp::deferred_tab_action_cb(void* data) {
+    TabAction* action = static_cast<TabAction*>(data);
+    TabData* tab = action->app->tab_for_group(action->group);   // may be gone by now
+    if (tab) action->app->run_tab_command(tab, action->command);
+    delete action;
+}
+
+void TextEditorApp::run_tab_command(TabData* tab, int command) {
+    switch (command) {
+        case TAB_CLOSE:
+            close_tab(tab);
+            break;
+        case TAB_CLOSE_OTHERS:
+        case TAB_CLOSE_ALL: {
+            const std::vector<TabData*> snapshot = open_tabs_;   // closing edits open_tabs_
+            for (size_t i = 0; i < snapshot.size(); ++i) {
+                if (command == TAB_CLOSE_OTHERS && snapshot[i] == tab) continue;
+                if (!close_tab(snapshot[i])) break;              // Cancel on a prompt stops the rest
+            }
+            break;
+        }
+        case TAB_COPY_PATH: copy_to_clipboard(tab->filepath); break;
+        default: break;
+    }
+    update_status_bar();
+}
+
+// ---------------------------------------------------------------------------
+// theme, fonts
+// ---------------------------------------------------------------------------
+
+// The scheme for the current mode. dark_scheme= / light_scheme= in the session file
+// choose which one; an unknown (or wrong-mode) name falls back to the default.
+const ColorSchemes::Scheme* TextEditorApp::active_scheme() const {
+    const ColorSchemes::Scheme* scheme =
+        ColorSchemes::find(session_.settings.get(dark_theme_ ? "dark_scheme" : "light_scheme"));
+    if (!scheme || scheme->dark != dark_theme_) scheme = ColorSchemes::fallback(dark_theme_);
+    return scheme;
+}
+
+// Fills the style table from the active scheme and the current fonts. The table is
+// shared by every editor, so changing it in place re-colours all of them.
+void TextEditorApp::rebuild_style_table() {
+    const std::vector<ColorSchemes::StyleSpec> specs = ColorSchemes::style_specs(Theme::scheme());
+    for (int i = 0; i < Highlighter::STYLE_COUNT; ++i) {
+        const ColorSchemes::StyleSpec& spec = specs[static_cast<size_t>(i)];
+        Fl_Font font = font_regular_;
+        if (spec.bold && spec.italic) font = font_bold_italic_;
+        else if (spec.bold) font = font_bold_;
+        else if (spec.italic) font = font_italic_;
+
+        Fl_Text_Editor::Style_Table_Entry& entry = style_table_[i];
+        entry.color = Theme::rgb(spec.rgb);
+        entry.font = font;
+        entry.size = font_size_;
+        entry.attr = 0;
+
+        Fl_Text_Editor::Style_Table_Entry& twin = style_table_[i + Highlighter::ICON_STYLE_OFFSET];
+        twin = entry;
+        twin.font = (icon_font_ >= 0) ? icon_font_ : font_regular_;   // icons: see resolve_icon_font()
+    }
+}
+
+void TextEditorApp::apply_theme() {
+    Theme::set_scheme(active_scheme());
+    Theme::apply();
+    rebuild_style_table();
+
+    color(Theme::window_bg());
+    file_browser_->color(Theme::panel_bg());
+    file_browser_->textcolor(Theme::text());
+    tabs_->color(Theme::window_bg());
+    status_bar_->color(Theme::panel_bg());
+    status_bar_->labelcolor(Theme::text());
+    for (size_t i = 0; i < open_tabs_.size(); ++i) {
+        TabData* tab = open_tabs_[i];
+        tab->group->color(Theme::window_bg());
+        Fl_Text_Editor* e = tab->editor;
+        e->color(Theme::editor_bg());
+        e->textcolor(Theme::text_strong());
+        e->cursor_color(Theme::cursor());
+        e->selection_color(Theme::selection());
+        e->linenumber_fgcolor(Theme::line_number_fg());
+        e->linenumber_bgcolor(Theme::line_number_bg());
+        e->redraw();
+    }
+    if (find_dialog_) find_dialog_->apply_theme();
+    if (replace_dialog_) replace_dialog_->apply_theme();
+    redraw();
+}
+
+void TextEditorApp::set_scheme(const ColorSchemes::Scheme* scheme) {
+    if (!scheme) return;
+    dark_theme_ = scheme->dark;
+    session_.settings.set("theme", dark_theme_ ? "dark" : "light");
+    session_.settings.set(dark_theme_ ? "dark_scheme" : "light_scheme", scheme->id);
+    apply_theme();
+}
+
+// "Theme..." dialog: previews each scheme as it is selected; Cancel puts back exactly
+// what was set before (including the other mode's remembered scheme).
+void TextEditorApp::choose_theme() {
+    Settings& st = session_.settings;
+    const bool was_dark = dark_theme_;
+    const std::string was_theme = st.get("theme", "dark");
+    const std::string was_dark_scheme = st.get("dark_scheme", ColorSchemes::fallback(true)->id);
+    const std::string was_light_scheme = st.get("light_scheme", ColorSchemes::fallback(false)->id);
+
+    const ColorSchemes::Scheme* picked = SchemeDialog::run(
+        &Theme::scheme(), [this](const ColorSchemes::Scheme* s) { set_scheme(s); }, x() + w() / 2, y() + h() / 2);
+    if (picked) {
+        set_scheme(picked);
+        set_status_message(std::string("Theme: ") + picked->name);
+        return;
+    }
+    dark_theme_ = was_dark;
+    st.set("theme", was_theme);
+    st.set("dark_scheme", was_dark_scheme);
+    st.set("light_scheme", was_light_scheme);
+    apply_theme();
+}
+
+// Lists every installed font face once (FLTK's list is slow-ish, so only on demand:
+// for a font_name= other than the default, and for the icon font).
+void TextEditorApp::ensure_font_list() {
+    if (fonts_listed_) return;
+    fonts_listed_ = true;
     const int count = Fl::set_fonts("*");
-    int best = -1, best_score = 0, best_attr = 0;
-    std::string best_name;
     for (int i = 0; i < count; ++i) {
         int attr = 0;
         const char* name = Fl::get_font_name(static_cast<Fl_Font>(i), &attr);
         if (!name) continue;
-        int sc = IconFont::score(name, attr, icon_font_name_);
-        if (sc > best_score) { best_score = sc; best = i; best_attr = attr; best_name = name; }
+        FontFace face;
+        face.name = name;
+        face.attr = attr;
+        face.index = static_cast<Fl_Font>(i);
+        font_faces_.push_back(face);
+    }
+}
+
+// Picks the regular/bold/italic/bold-italic faces of the font family `name`
+// (case-insensitive). Unknown names keep Courier; the name itself stays in the
+// session file. Returns false if the family was not found.
+bool TextEditorApp::resolve_font(const std::string& name) {
+    font_regular_ = FL_COURIER;
+    font_bold_ = FL_COURIER_BOLD;
+    font_italic_ = FL_COURIER_ITALIC;
+    font_bold_italic_ = FL_COURIER_BOLD_ITALIC;
+    if (name.empty() || equals_nocase(name, DEFAULT_FONT_NAME)) return true;
+
+    ensure_font_list();
+    int face[4] = {-1, -1, -1, -1};   // index by attribute bits: bold = 1, italic = 2
+    for (size_t i = 0; i < font_faces_.size(); ++i) {
+        const FontFace& f = font_faces_[i];
+        if (f.attr >= 0 && f.attr < 4 && face[f.attr] < 0 && equals_nocase(f.name, name)) face[f.attr] = f.index;
+    }
+    if (face[0] < 0) return false;
+    font_regular_ = static_cast<Fl_Font>(face[0]);
+    font_bold_ = static_cast<Fl_Font>(face[1] >= 0 ? face[1] : face[0]);
+    font_italic_ = static_cast<Fl_Font>(face[2] >= 0 ? face[2] : face[0]);
+    font_bold_italic_ = static_cast<Fl_Font>(face[3] >= 0 ? face[3] : (face[1] >= 0 ? face[1] : face[0]));
+    return true;
+}
+
+// FLTK 1.3 draws each style run with one font and has no per-glyph fallback, so
+// private-use characters (FontAwesome & co.) would show as empty boxes in a
+// monospace font. Their style twins use an icon font instead; look for one among
+// the installed fonts. Done lazily, the first time a document contains such glyphs.
+void TextEditorApp::resolve_icon_font() {
+    icon_font_resolved_ = true;
+    ensure_font_list();
+    int best = -1, best_score = 0, best_attr = 0;
+    std::string best_name;
+    for (size_t i = 0; i < font_faces_.size(); ++i) {
+        const int sc = IconFont::score(font_faces_[i].name, font_faces_[i].attr, icon_font_name_);
+        if (sc > best_score) { best_score = sc; best = font_faces_[i].index; best_attr = font_faces_[i].attr; best_name = font_faces_[i].name; }
     }
     if (best < 0) {
-        set_status_message("No icon font found: install FontAwesome or a Nerd Font, or set icon_font=NAME in ~/.flitpad_config");
+        set_status_message("No icon font found: install FontAwesome or a Nerd Font, or set icon_font=NAME in ~/.flitpad_session");
         return;
     }
-    for (int i = Highlighter::ICON_STYLE_OFFSET; i < STYLE_COUNT; ++i) style_table_[i].font = static_cast<Fl_Font>(best);
+    icon_font_ = static_cast<Fl_Font>(best);
+    rebuild_style_table();
     for (size_t i = 0; i < open_tabs_.size(); ++i) open_tabs_[i]->editor->redraw();
     set_status_message("Icon font: " + best_name + ((best_attr & 1) ? " (bold)" : ""));
 }
 
-void TextEditorApp::set_font_size(int size) {
-    size = std::max(MIN_FONT_SIZE, std::min(MAX_FONT_SIZE, size));
-    font_size_ = size;
-    for (int i = 0; i < STYLE_COUNT; ++i) style_table_[i].size = size;
+void TextEditorApp::apply_font_changes() {
+    rebuild_style_table();
     for (size_t i = 0; i < open_tabs_.size(); ++i) {
         TabData* tab = open_tabs_[i];
-        tab->editor->textsize(size);
-        tab->editor->linenumber_width(static_cast<int>(size * 3.3));
-        tab->editor->linenumber_size(std::max(8, size - 3));
+        tab->editor->textfont(font_regular_);
+        tab->editor->textsize(font_size_);
+        tab->editor->linenumber_width(static_cast<int>(font_size_ * 3.3));
+        tab->editor->linenumber_size(std::max(8, font_size_ - 3));
         tab->editor->highlight_data(tab->style_buffer, style_table_, STYLE_COUNT, 'A', 0, 0);
         tab->editor->redraw();
     }
-    set_status_message("Font size " + std::to_string(size));
+}
+
+void TextEditorApp::set_font_size(int size) {
+    font_size_ = std::max(MIN_FONT_SIZE, std::min(MAX_FONT_SIZE, size));
+    apply_font_changes();
+    set_status_message("Font size " + std::to_string(font_size_));
+}
+
+// ---------------------------------------------------------------------------
+// outside changes and dropped files
+// ---------------------------------------------------------------------------
+
+void TextEditorApp::external_change_cb(void* data) {
+    TextEditorApp* self = static_cast<TextEditorApp*>(data);
+    self->check_external_change(self->get_current_tab());
+    if (NativeTheme::preference_changed()) NativeTheme::apply(self);   // Windows: dark / light title bar
+    Fl::repeat_timeout(1.0, external_change_cb, data);
+}
+
+// If another program changed the file under this tab: reload it silently when there
+// is nothing unsaved here, otherwise ask. Asked once per change.
+void TextEditorApp::check_external_change(TabData* tab) {
+    if (!tab || tab->is_untitled || checking_changes_) return;
+    const long long modified = TextFile::modified_time(tab->filepath);
+    if (modified == 0 || modified == tab->mtime) return;   // unchanged, or deleted (the text stays in the editor)
+
+    checking_changes_ = true;
+    tab->mtime = modified;
+    bool reload = true;
+    if (tab->is_modified) {
+        reload = fl_choice("%s was changed on disk, and you have unsaved changes here.", "Keep Mine", "Reload", 0,
+                           tab->filename.c_str()) == 1;
+        if (std::find(open_tabs_.begin(), open_tabs_.end(), tab) == open_tabs_.end()) reload = false;   // closed meanwhile
+    }
+    if (reload) reload_tab(tab);
+    checking_changes_ = false;
+}
+
+void TextEditorApp::reload_tab(TabData* tab) {
+    std::string content, error;
+    bool crlf = false;
+    if (!TextFile::read(tab->filepath, content, crlf, error)) {
+        set_status_message("Could not reload " + tab->filename);
+        return;
+    }
+    const int pos = tab->editor->insert_position();
+    tab->crlf = crlf;
+    tab->buffer->text(content.c_str());
+    tab->editor->insert_position(std::min(pos, tab->buffer->length()));
+    tab->editor->show_insert_position();
+    tab->is_modified = false;   // the text change above marked it modified
+    update_tab_label(tab);
+    set_status_message(tab->filename + " changed on disk and was reloaded");
+}
+
+// Files dropped on the editor or the sidebar (or "copy file" + paste): open them;
+// a dropped folder becomes the sidebar folder. False if the text is not a file list.
+bool TextEditorApp::open_dropped(const std::string& text) {
+    const std::vector<std::string> paths = PathUtil::parse_uri_list(text);
+    if (paths.empty()) return false;
+    for (size_t i = 0; i < paths.size(); ++i) {
+        if (fl_filename_isdir(paths[i].c_str())) set_current_dir(get_absolute_path(paths[i]));
+        else open_file(paths[i]);
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Ctrl+Tab switcher
+// ---------------------------------------------------------------------------
+
+void TextEditorApp::activate_tab(TabData* tab) {
+    tabs_->value(tab->group);
+    tabs_->set_changed();
+    tabs_->do_callback();   // tabs_cb focuses the editor and refreshes the status bar
+}
+
+// Ctrl+Tab opens a list of the open files in tab order, with full paths, and moves down
+// to the next one; every further Tab moves down, Shift+Tab (or Ctrl+Shift+Tab to begin
+// with) moves up, and releasing Ctrl switches to the selected file.
+void TextEditorApp::show_tab_switcher(bool backwards) {
+    if (!switcher_ || open_tabs_.size() < 2) return;
+
+    switcher_tabs_ = open_tabs_;
+    int current = 0;
+    std::vector<TabSwitcher::Entry> entries;
+    for (size_t i = 0; i < switcher_tabs_.size(); ++i) {
+        const TabData* t = switcher_tabs_[i];
+        if (t == get_current_tab()) current = static_cast<int>(i);
+        TabSwitcher::Entry e;
+        e.title = t->filename + (t->is_modified ? " *" : "");
+        e.path = t->is_untitled ? t->filepath + "   (not saved yet)" : t->filepath;
+        entries.push_back(e);
+    }
+    switcher_->open(entries, current, w(), h());   // starts on the current file ...
+    switcher_->move(backwards ? -1 : 1);           // ... and the key press moves from there (wraps around)
+}
+
+void TextEditorApp::commit_tab_switcher() {
+    if (!switcher_ || !switcher_->visible()) return;
+    const int row = switcher_->selected();
+    switcher_->close();
+    if (row >= 0 && row < static_cast<int>(switcher_tabs_.size()) &&
+        std::find(open_tabs_.begin(), open_tabs_.end(), switcher_tabs_[static_cast<size_t>(row)]) != open_tabs_.end())
+        activate_tab(switcher_tabs_[static_cast<size_t>(row)]);
+    switcher_tabs_.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -1585,6 +1798,37 @@ int TextEditorApp::kf_shift_tab(int, Fl_Text_Editor* e) {
 // ---------------------------------------------------------------------------
 
 int TextEditorApp::handle(int event) {
+    if (switcher_ && switcher_->visible()) {
+        if (event == FL_KEYBOARD) {
+            const int key = Fl::event_key();
+            if (key == FL_Tab) switcher_->move((Fl::event_state() & FL_SHIFT) ? -1 : 1);
+            else if (key == FL_Down) switcher_->move(1);
+            else if (key == FL_Up) switcher_->move(-1);
+            else if (key == FL_Escape) { switcher_->close(); switcher_tabs_.clear(); }
+            else if (key == FL_Enter || key == FL_KP_Enter) commit_tab_switcher();
+            return 1;   // nothing reaches the editor while the list is open
+        }
+        if (event == FL_KEYUP) {
+            const int key = Fl::event_key();
+            if (key == FL_Control_L || key == FL_Control_R) commit_tab_switcher();   // releasing Ctrl = switch
+            return 1;
+        }
+        if (event == FL_PUSH) {
+            const int row = switcher_->row_at(Fl::event_x(), Fl::event_y());
+            if (row >= 0) { switcher_->select(row); commit_tab_switcher(); }
+            else { switcher_->close(); switcher_tabs_.clear(); }
+            return 1;
+        }
+        if (event == FL_UNFOCUS) { switcher_->close(); switcher_tabs_.clear(); }
+    }
+
+    if (open_tabs_.empty()) {   // no editor to drop onto: the window itself takes the files
+        if (event == FL_DND_ENTER || event == FL_DND_DRAG || event == FL_DND_RELEASE || event == FL_DND_LEAVE) return 1;
+        if (event == FL_PASTE && Fl::event_text() &&
+            open_dropped(std::string(Fl::event_text(), static_cast<size_t>(Fl::event_length()))))
+            return 1;
+    }
+
     if (event == FL_KEYBOARD) {
         const int key = Fl::event_key();
         const int state = Fl::event_state();
@@ -1622,23 +1866,13 @@ int TextEditorApp::handle(int event) {
                 case '=': case '+': case FL_KP + '+': set_font_size(font_size_ + 1); return 1;
                 case '-': case FL_KP + '-': set_font_size(font_size_ - 1); return 1;
                 case '0': case FL_KP + '0': set_font_size(DEFAULT_FONT_SIZE); return 1;
-                case FL_Tab:
-                    if (!open_tabs_.empty()) {
-                        size_t cur = 0;
-                        Fl_Widget* current = tabs_->value();
-                        for (size_t i = 0; i < open_tabs_.size(); ++i)
-                            if (open_tabs_[i]->group == current) { cur = i; break; }
-                        size_t next = (state & FL_SHIFT) ? (cur == 0 ? open_tabs_.size() - 1 : cur - 1)
-                                                         : (cur + 1) % open_tabs_.size();
-                        select_tab(next);
-                    }
-                    return 1;
+                case FL_Tab: show_tab_switcher((state & FL_SHIFT) != 0); return 1;
                 default: break;
             }
         }
     }
 
-    // Right-click in the editor: like Geany, the caret moves to the click unless it
+    // Right-click in the editor: the caret moves to the click unless it
     // landed inside the selection, then the context menu opens.
     if (event == FL_PUSH && Fl::event_button() == FL_RIGHT_MOUSE) {
         TabData* tab = get_current_tab();
